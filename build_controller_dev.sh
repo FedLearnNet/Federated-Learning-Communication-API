@@ -1,0 +1,1 @@
+docker build -t feddb_fc_controller -f ./Dockerfile.dev .

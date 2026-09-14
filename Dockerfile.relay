@@ -1,0 +1,20 @@
+FROM cgr.dev/chainguard/go:latest
+
+ENV FC_DOCKERIZED=1
+
+WORKDIR /go/src/fc_relay
+
+#install
+COPY go.* /go/src/fc_relay/
+RUN go mod download
+
+COPY cmd/relay cmd/relay
+COPY pkg pkg
+
+RUN go build -o /go/bin/relay fc_controller/cmd/relay
+
+RUN rm -r pkg && rm -r cmd
+
+EXPOSE 9140 9141
+
+ENTRYPOINT ["/go/bin/relay"]

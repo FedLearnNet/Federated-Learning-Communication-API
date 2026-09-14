@@ -1,0 +1,10 @@
+.idea
+*.db
+*.log
+*.json
+*.zip
+*.pem
+*.sh
+data
+.gitlab-ci.yml
+.gitignore

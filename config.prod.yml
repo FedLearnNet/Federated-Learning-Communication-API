@@ -1,0 +1,8 @@
+manager:                                                # WORKFLOW MANAGER RELATED PARAMETERS
+  flrunmanagerport: 8000                                    # the port where this controller will be accessible at
+  appCommV2Port: 8001                                     # the port for app communication v2
+  logLevelStdOut: "warn"                                 # available levels: "debug", "info", "warn", "error", "fatal"
+  logLevelFile: "info"                                   # available levels: "debug", "info", "warn", "error", "fatal"
+  learningApiWsAddress: ""                              # LocalLearningAPI websocket server address. Needs to be overriden
+relay:                                                  # RELAY SERVER RELATED PARAMETERS (relay server is responsible for communication between applications)
+  addressTCP: "federated-learning.net:9152"        # TCP port for relay communication in format host:port, without protocol/scheme

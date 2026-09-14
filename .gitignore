@@ -1,0 +1,20 @@
+tests
+.idea
+*.db
+*.log
+*.json
+*.zip
+*.pem
+**/*.pem
+# LLM shit
+.codex
+.claude
+
+# compiled binaries
+/controller
+/relay
+/main
+__pycache__
+
+/controller-test
+/relay-test

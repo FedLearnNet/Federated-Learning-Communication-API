@@ -1,0 +1,22 @@
+FROM cgr.dev/chainguard/go:latest
+
+ENV FC_DOCKERIZED=1
+
+WORKDIR /go/src/fc_controller
+
+COPY go.* /go/src/fc_controller/
+RUN go mod download
+
+COPY cmd/controller cmd/controller
+COPY pkg pkg
+
+RUN go build -o /go/bin/controller fc_controller/cmd/controller
+
+COPY config.staging.yml config.yml
+
+RUN rm -r pkg && rm -r cmd
+
+EXPOSE 8000 8001
+
+ENTRYPOINT ["/go/bin/controller"]
+
