@@ -123,14 +123,13 @@ jobs:
             -t "$IMAGE:$tag-${GITHUB_SHA::7}" \
             $(printf "$IMAGE@sha256:%s " *)
 
-  # Vulnerability scan after every build (results under Security → Code scanning).
-  # Disabled for now, run the "Container scan" workflow manually instead. Uncomment to enable.
-  # scan:
-  #   needs: manifest
-  #   uses: ./.github/workflows/scan.yml
-  #   with:
-  #     tag: ${{ github.ref == 'refs/heads/main' && 'latest' || 'staging' }}
-  #   permissions:
-  #     contents: read
-  #     packages: read
-  #     security-events: write
+  # Vulnerability scan after every build (results under Security → Code scanning)
+  scan:
+    needs: manifest
+    uses: ./.github/workflows/scan.yml
+    with:
+      tag: ${{ github.ref == 'refs/heads/main' && 'latest' || 'staging' }}
+    permissions:
+      contents: read
+      packages: read
+      security-events: write

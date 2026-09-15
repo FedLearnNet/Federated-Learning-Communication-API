@@ -13,9 +13,9 @@ on:
       tag:
         type: string
         required: true
-  # Weekly scan of the published images. Disabled for now: uncomment to enable.
-  # schedule:
-  #   - cron: "0 6 * * 1" # Mondays 06:00 UTC
+  # Weekly scan of the published images
+  schedule:
+    - cron: "0 6 * * 1" # Mondays 06:00 UTC
 
 permissions:
   contents: read

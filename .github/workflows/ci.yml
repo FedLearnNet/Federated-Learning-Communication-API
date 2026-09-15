@@ -166,6 +166,8 @@ jobs:
     needs: [test, e2e]
     if: github.event_name != 'pull_request' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop')
     uses: ./.github/workflows/docker.yml
+    # security-events: the image scan inside docker.yml uploads its findings to code scanning
     permissions:
       contents: read
       packages: write
+      security-events: write
