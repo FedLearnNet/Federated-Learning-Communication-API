@@ -1,0 +1,136 @@
+name: Docker images
+
+# Called by CI after tests pass; can also be started manually
+on:
+  workflow_call:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  REGISTRY: ghcr.io/fedlearnnet/federated-learning-communication-api
+
+jobs:
+  build:
+    name: Build ${{ matrix.image }} (${{ matrix.arch }})
+    # main -> latest, develop -> staging; other branches would overwrite those tags
+    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop'
+    strategy:
+      fail-fast: false
+      matrix:
+        image: [controller, controller-relay]
+        arch: [amd64, arm64]
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    # The Dockerfiles compile Go, so each architecture builds natively instead of under emulation
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+
+      # The controller image embeds config.prod.yml (Dockerfile) or config.staging.yml (Dockerfile.staging)
+      - name: Select Dockerfile
+        id: vars
+        env:
+          IMAGE: ${{ matrix.image }}
+        run: |
+          if [ "$IMAGE" = "controller-relay" ]; then
+            echo "dockerfile=Dockerfile.relay" >> "$GITHUB_OUTPUT"
+          elif [ "$GITHUB_REF" = "refs/heads/main" ]; then
+            echo "dockerfile=Dockerfile" >> "$GITHUB_OUTPUT"
+          else
+            echo "dockerfile=Dockerfile.staging" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: docker/setup-buildx-action@v4.3.0
+
+      - uses: docker/login-action@v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push by digest
+        id: build
+        uses: docker/build-push-action@v7.3.0
+        with:
+          context: .
+          file: ${{ steps.vars.outputs.dockerfile }}
+          platforms: linux/${{ matrix.arch }}
+          provenance: false
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+          outputs: type=image,name=${{ env.REGISTRY }}/${{ matrix.image }},push-by-digest=true,name-canonical=true,push=true
+          # Reuses the go mod download layer as long as go.mod/go.sum are unchanged
+          cache-from: type=gha,scope=${{ matrix.image }}-${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.image }}-${{ matrix.arch }}
+
+      - name: Export digest
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/digests"
+          touch "$RUNNER_TEMP/digests/${DIGEST#sha256:}"
+
+      - uses: actions/upload-artifact@v7.0.1
+        with:
+          name: digest-${{ matrix.image }}-${{ matrix.arch }}
+          path: ${{ runner.temp }}/digests/*
+          retention-days: 1
+
+  manifest:
+    name: Tag ${{ matrix.image }}
+    needs: build
+    strategy:
+      matrix:
+        image: [controller, controller-relay]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/download-artifact@v8.0.1
+        with:
+          path: ${{ runner.temp }}/digests
+          pattern: digest-${{ matrix.image }}-*
+          merge-multiple: true
+
+      - uses: docker/login-action@v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Create multi-arch tags
+        working-directory: ${{ runner.temp }}/digests
+        env:
+          IMAGE: ${{ env.REGISTRY }}/${{ matrix.image }}
+        run: |
+          tag=$([ "$GITHUB_REF" = "refs/heads/main" ] && echo latest || echo staging)
+          docker buildx imagetools create \
+            -t "$IMAGE:$tag" \
+            -t "$IMAGE:$tag-${GITHUB_SHA::7}" \
+            $(printf "$IMAGE@sha256:%s " *)
+
+  # Vulnerability scan after every build (results under Security → Code scanning).
+  # Disabled for now, run the "Container scan" workflow manually instead. Uncomment to enable.
+  # scan:
+  #   needs: manifest
+  #   uses: ./.github/workflows/scan.yml
+  #   with:
+  #     tag: ${{ github.ref == 'refs/heads/main' && 'latest' || 'staging' }}
+  #   permissions:
+  #     contents: read
+  #     packages: read
+  #     security-events: write

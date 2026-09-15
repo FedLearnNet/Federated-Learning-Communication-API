@@ -1,6 +1,6 @@
 services:
   controller:
-    image: gitlab.cosy.bio:5050/cosybio/federated-learning/federated_db/feature-cloud-controller/controller:staging
+    image: ghcr.io/fedlearnnet/federated-learning-communication-api/controller:staging
     ports:
       - 8002:8000 # orchestration http
       - 8003:8001 # app comm http
@@ -22,7 +22,7 @@ services:
 
 
   relay:
-    image: gitlab.cosy.bio:5050/cosybio/federated-learning/federated_db/feature-cloud-controller/controller-relay:staging
+    image: ghcr.io/fedlearnnet/federated-learning-communication-api/controller-relay:staging
     ports:
       - 9141:9141 # tcp port
       - 9140:9140 # http port

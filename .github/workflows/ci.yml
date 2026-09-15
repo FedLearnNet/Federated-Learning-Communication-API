@@ -1,0 +1,171 @@
+name: CI
+
+on:
+  push:
+    branches: [main, develop]
+    paths:
+      - "**/*.go"
+      - "go.mod"
+      - "go.sum"
+      - "e2etests/**"
+      - "Dockerfile*"
+      - "config*.yml"
+      - ".github/workflows/ci.yml"
+      - ".github/workflows/docker.yml"
+  pull_request:
+    paths:
+      - "**/*.go"
+      - "go.mod"
+      - "go.sum"
+      - "e2etests/**"
+      - "Dockerfile*"
+      - "config*.yml"
+      - ".github/workflows/ci.yml"
+      - ".github/workflows/docker.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  test:
+    name: Format and unit tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-go@v7.0.0
+        with:
+          go-version-file: go.mod
+
+      - name: Check formatting
+        run: |
+          unformatted="$(gofmt -l .)"
+          if [ -n "$unformatted" ]; then
+            echo "::error::Run gofmt on these files:"
+            echo "$unformatted"
+            exit 1
+          fi
+
+      - name: Unit tests
+        run: go run gotest.tools/gotestsum@v1.13.0 --junitfile test-results/junit.xml -- ./...
+
+      - name: Publish test results
+        if: ${{ !cancelled() }}
+        uses: mikepenz/action-junit-report@v6.5.0
+        with:
+          report_paths: "test-results/junit.xml"
+          annotate_only: true
+          require_tests: true
+          include_time_in_summary: true
+
+  # Relay and controller as local binaries, driven by the Python test client (plain, DP and SMPC flows)
+  e2e:
+    name: End-to-end tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-go@v7.0.0
+        with:
+          go-version-file: go.mod
+
+      - uses: actions/setup-python@v7.0.0
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: e2etests/requirements.txt
+
+      - name: Install test client dependencies
+        run: pip install -r e2etests/requirements.txt
+
+      - name: End-to-end tests
+        run: bash e2etests/e2e_test.sh
+
+      - name: Upload relay and controller logs
+        if: ${{ failure() }}
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          name: e2e-logs
+          path: e2etests/tmp_*.log
+          if-no-files-found: ignore
+          retention-days: 7
+
+  # Reported, but not blocking (as on GitLab)
+  lint:
+    name: golangci-lint
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    continue-on-error: true
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-go@v7.0.0
+        with:
+          go-version-file: go.mod
+
+      - uses: golangci/golangci-lint-action@v9.3.0
+        with:
+          version: v2.13.2
+          args: --output.text.path=stdout --output.sarif.path=golangci-lint.sarif
+
+      # Findings appear under Security → Code scanning
+      - name: Upload findings
+        if: ${{ !cancelled() && hashFiles('golangci-lint.sarif') != '' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
+        uses: github/codeql-action/upload-sarif@v4.38.0
+        with:
+          sarif_file: golangci-lint.sarif
+          category: golangci-lint
+
+  # Go's official vulnerability scanner; reported, but not blocking (as on GitLab)
+  govulncheck:
+    name: govulncheck
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    continue-on-error: true
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: golang/govulncheck-action@v1.1.0
+        with:
+          repo-checkout: false
+          go-version-file: go.mod
+          output-format: sarif
+          output-file: govulncheck.sarif
+
+      - name: Upload findings
+        if: ${{ !cancelled() && hashFiles('govulncheck.sarif') != '' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
+        uses: github/codeql-action/upload-sarif@v4.38.0
+        with:
+          sarif_file: govulncheck.sarif
+          category: govulncheck
+
+  # Images are only published when tests and e2e tests pass (main -> latest, develop -> staging)
+  images:
+    name: Docker images
+    needs: [test, e2e]
+    if: github.event_name != 'pull_request' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop')
+    uses: ./.github/workflows/docker.yml
+    permissions:
+      contents: read
+      packages: write

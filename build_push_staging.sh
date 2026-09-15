@@ -7,6 +7,6 @@ if [ "$answer" != "y" ]; then
 fi
 
 # relay
-docker build -t gitlab.cosy.bio:5050/cosybio/federated-learning/federated_db/feature-cloud-controller/controller-relay:staging -f Dockerfile.relay . --push
+docker build -t ghcr.io/fedlearnnet/federated-learning-communication-api/controller-relay:staging -f Dockerfile.relay . --push
 # controller
-docker build -t gitlab.cosy.bio:5050/cosybio/federated-learning/federated_db/feature-cloud-controller/controller:staging -f Dockerfile . --push
+docker build -t ghcr.io/fedlearnnet/federated-learning-communication-api/controller:staging -f Dockerfile . --push

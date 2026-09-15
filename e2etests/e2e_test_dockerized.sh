@@ -16,8 +16,8 @@ cd "$SCRIPT_DIR/.."
 # If you add something also build/pull it and add it to the testing below
 LOCAL_RELAY_IMAGE="fc_relay_e2etest"
 LOCAL_CONTROLLER_IMAGE="fc_controller_e2etest"
-STAGING_RELAY_IMAGE="gitlab.cosy.bio:5050/cosybio/federated-learning/federated_db/feature-cloud-controller/controller-relay:staging"
-STAGING_CONTROLLER_IMAGE="gitlab.cosy.bio:5050/cosybio/federated-learning/federated_db/feature-cloud-controller/controller:staging"
+STAGING_RELAY_IMAGE="ghcr.io/fedlearnnet/federated-learning-communication-api/controller-relay:staging"
+STAGING_CONTROLLER_IMAGE="ghcr.io/fedlearnnet/federated-learning-communication-api/controller:staging"
 
 # Container names and log prefixes
 RELAY_CONTAINER="fc_relay_e2etest"

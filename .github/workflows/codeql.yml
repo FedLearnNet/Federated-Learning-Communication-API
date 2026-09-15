@@ -1,0 +1,65 @@
+name: CodeQL
+
+on:
+  push:
+    branches: [main, develop]
+    paths:
+      - "**/*.go"
+      - "go.mod"
+      - "go.sum"
+      - ".github/workflows/**"
+  pull_request:
+    paths:
+      - "**/*.go"
+      - "go.mod"
+      - "go.sum"
+      - ".github/workflows/**"
+  workflow_dispatch:
+  # Weekly analysis, also picks up newly released CodeQL queries. Disabled for now: uncomment to enable.
+  # schedule:
+  #   - cron: "0 5 * * 1" # Mondays 05:00 UTC
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  analyze:
+    name: Analyze (${{ matrix.language }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      security-events: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # go: relay and controller; CodeQL compiles Go code itself
+          - language: go
+            build-mode: autobuild
+          # actions: the workflows in .github/workflows
+          - language: actions
+            build-mode: none
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+
+      - if: matrix.language == 'go'
+        uses: actions/setup-go@v7.0.0
+        with:
+          go-version-file: go.mod
+
+      - uses: github/codeql-action/init@v4.38.0
+        with:
+          languages: ${{ matrix.language }}
+          build-mode: ${{ matrix.build-mode }}
+
+      # Findings appear under Security → Code scanning and as pull request annotations
+      - uses: github/codeql-action/analyze@v4.38.0
+        with:
+          category: /language:${{ matrix.language }}

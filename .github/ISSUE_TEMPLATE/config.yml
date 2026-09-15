@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Documentation
+    url: https://federated-learning.net/documentation/
+    about: User, deployment, tool-development and contribution guides.
+  - name: Report a security vulnerability
+    url: https://github.com/FedLearnNet/Federated-Learning-Communication-API/security/advisories/new
+    about: Please report security issues privately, not as a public issue.

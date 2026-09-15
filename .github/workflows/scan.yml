@@ -1,0 +1,62 @@
+name: Container scan
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Image tag to scan
+        type: choice
+        options: [latest, staging]
+        default: latest
+  workflow_call:
+    inputs:
+      tag:
+        type: string
+        required: true
+  # Weekly scan of the published images. Disabled for now: uncomment to enable.
+  # schedule:
+  #   - cron: "0 6 * * 1" # Mondays 06:00 UTC
+
+permissions:
+  contents: read
+
+env:
+  REGISTRY: ghcr.io/fedlearnnet/federated-learning-communication-api
+
+jobs:
+  scan:
+    name: Scan ${{ matrix.image }}:${{ matrix.tag }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      packages: read
+      security-events: write
+    strategy:
+      fail-fast: false
+      matrix:
+        image: [controller, controller-relay]
+        # Scheduled runs have no inputs and scan both published tags
+        tag: ${{ fromJSON(inputs.tag && format('["{0}"]', inputs.tag) || '["latest", "staging"]') }}
+    steps:
+      - uses: docker/login-action@v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Scan image
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          image-ref: ${{ env.REGISTRY }}/${{ matrix.image }}:${{ matrix.tag }}
+          format: sarif
+          output: trivy.sarif
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          limit-severities-for-sarif: true
+
+      # Findings appear under Security → Code scanning
+      - uses: github/codeql-action/upload-sarif@v4.38.0
+        with:
+          sarif_file: trivy.sarif
+          category: trivy-${{ matrix.image }}-${{ matrix.tag }}
