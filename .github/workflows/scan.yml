@@ -56,7 +56,7 @@ jobs:
           limit-severities-for-sarif: true
 
       # Findings appear under Security → Code scanning
-      - uses: github/codeql-action/upload-sarif@v4.38.0
+      - uses: github/codeql-action/upload-sarif@v4.38.1
         with:
           sarif_file: trivy.sarif
           category: trivy-${{ matrix.image }}-${{ matrix.tag }}
