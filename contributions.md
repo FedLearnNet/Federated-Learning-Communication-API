@@ -4,14 +4,11 @@ This repository was moved from the internal GitLab of the Institute for Computat
 (cosy.bio) to GitHub without its Git history. This file keeps the credit for everyone who contributed before
 the move.
 
+- Julian Klemm
 - Simon Süwer
 - Sándor Fejér
 - Balazs Orban
-- Julian Klemm
-- Julian Matschinske
-- Julian Späth
 - Niklas Probul
-- Mohammad Bakhtiari
-- Reza Nasirigerdeh
-- Reihaneh Torkzadehmahani
-- Mahdi Kazemi Majdabadi
+
+This does NOT contain the full list of contributors to the FeatureCloud controller/relay server 
+this is based of, but any changes done for the FL-Net.
