@@ -127,7 +127,7 @@ jobs:
       # Findings appear under Security → Code scanning
       - name: Upload findings
         if: ${{ !cancelled() && hashFiles('golangci-lint.sarif') != '' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
-        uses: github/codeql-action/upload-sarif@v4.38.0
+        uses: github/codeql-action/upload-sarif@v4.38.1
         with:
           sarif_file: golangci-lint.sarif
           category: golangci-lint
@@ -155,7 +155,7 @@ jobs:
 
       - name: Upload findings
         if: ${{ !cancelled() && hashFiles('govulncheck.sarif') != '' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
-        uses: github/codeql-action/upload-sarif@v4.38.0
+        uses: github/codeql-action/upload-sarif@v4.38.1
         with:
           sarif_file: govulncheck.sarif
           category: govulncheck
