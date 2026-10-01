@@ -4,6 +4,8 @@
 package bridge
 
 import (
+	"crypto/sha256"
+	"errors"
 	"fmt"
 	"sync"
 	"sync/atomic"
@@ -23,6 +25,14 @@ type FlRunMeta struct {
 	// Auth keys generated at creation time; never changed after init.
 	CoordinatorKey     util.APIKey
 	ClientId2ClientKey map[shared.ClientID]util.APIKey
+
+	// CA signs the client certificates the controllers of this run present on the
+	// TCP connection (mTLS). Generated at creation time; never changed after init.
+	CA *util.RunCA
+	// signedCertKeys binds each client to the public key (hash) its certificate was signed
+	// for, so only one key pair per client is ever accepted for this run.
+	signedCertKeys      map[shared.ClientID][sha256.Size]byte
+	mutexSignedCertKeys sync.Mutex
 
 	// state tracks the run's lifecycle (Init, Running, Error, Finished).
 	// Shared with TCP relay goroutines for automatic graceful exit.
@@ -81,12 +91,19 @@ func newFlRun(maxNumClients int, appVersion enums.AppVersionEnum) (*FlRunMeta, e
 		return nil, fmt.Errorf("failed to create relay key: %w", err)
 	}
 
+	ca, err := util.GenerateRunCA()
+	if err != nil {
+		return nil, fmt.Errorf("failed to create run CA: %w", err)
+	}
+
 	fr := flrun.NewFlRun(channel, coordinatorID, clientIDs, maxNumClients, relayKey, appVersion)
 
 	return &FlRunMeta{
 		FlRunBase:          fr,
 		CoordinatorKey:     coordinatorKey,
 		ClientId2ClientKey: clientId2ClientKey,
+		CA:                 ca,
+		signedCertKeys:     make(map[shared.ClientID][sha256.Size]byte, maxNumClients+1),
 		Connections:        make(map[shared.ClientID]*shared.TCPIO, maxNumClients),
 		// State defaults to StateInit (0) via zero initialization
 	}, nil
@@ -139,6 +156,43 @@ func (fr *FlRunMeta) Authenticate(clientID shared.ClientID, clientKey util.APIKe
 		}
 	}
 	return clientKey.CheckApiKey(expectedKey)
+}
+
+// ErrUnknownClient is returned when a client ID does not belong to the FL run.
+var ErrUnknownClient = errors.New("client does not belong to this FL run")
+
+// ErrKeyAlreadyBound is returned when a certificate was already signed for another
+// key pair of the same client.
+var ErrKeyAlreadyBound = errors.New("a certificate for another key was already signed for this client")
+
+// SignClientCert signs the PEM encoded CSR of a participant of this run and returns the
+// PEM encoded client certificate. The CSR's common name must be the client ID.
+// Signing the same key again is allowed (e.g. a retry after a lost response), but a
+// client can never get certificates for two different keys.
+func (fr *FlRunMeta) SignClientCert(clientID shared.ClientID, csrPEM []byte) ([]byte, error) {
+	if !fr.IsActive() {
+		return nil, shared.ErrStopped
+	}
+	if _, exists := fr.ClientId2ClientKey[clientID]; !exists && !fr.IsCoordinator(clientID) {
+		return nil, ErrUnknownClient
+	}
+
+	csr, keyHash, err := util.ParseClientCSR(csrPEM, clientID.ToString())
+	if err != nil {
+		return nil, err
+	}
+
+	fr.mutexSignedCertKeys.Lock()
+	defer fr.mutexSignedCertKeys.Unlock()
+	if boundKeyHash, exists := fr.signedCertKeys[clientID]; exists && boundKeyHash != keyHash {
+		return nil, ErrKeyAlreadyBound
+	}
+	certPEM, err := fr.CA.SignClientCSR(csr)
+	if err != nil {
+		return nil, err
+	}
+	fr.signedCertKeys[clientID] = keyHash
+	return certPEM, nil
 }
 
 func (fr *FlRunMeta) GetConnections() []*shared.TCPIO {

@@ -189,7 +189,7 @@ func TestFLRunManagerBo_StartRun_Conflict(t *testing.T) {
 	key := bridge.RunKey{Channel: ch, AppKey: "myapp"}
 	bo.flRuns[key] = flRunOrch{} // simulate a run already in progress
 
-	err := bo.StartRun(&models.NormalizedFLExperiment{
+	_, err := bo.StartRun(&models.NormalizedFLExperiment{
 		Channel:        ch,
 		AppKey:         "myapp",
 		ClientId:       newClientID(t),
@@ -247,5 +247,149 @@ func TestFLRunManagerBo_StopRun_Success(t *testing.T) {
 	}
 	if _, exists := bo.flRuns[key]; exists {
 		t.Error("expected run to be removed from map after StopRun")
+	}
+}
+
+// --- CSR / start-relaying tests ---
+
+// startLearning posts a valid v2 experiment for a single (non coordinator) client and
+// returns the request and the CSR of the response.
+func startLearning(t *testing.T, ts *httptest.Server) (models.FLExperiment, []byte) {
+	t.Helper()
+	clientId := newClientID(t)
+	experiment := models.FLExperiment{
+		Channel:        newChannel(t).ToString(),
+		ClientId:       clientId,
+		ClientKey:      newAPIKey(t),
+		RelayKey:       newAPIKey(t),
+		RunId:          "run-1",
+		CoordinatorId:  newClientID(t),
+		MaxNumClients:  1,
+		OrderClientIds: []shared.ClientID{clientId},
+		AppKey:         newAPIKey(t),
+		AppVersion:     shared_enums.AppVersionV2,
+	}
+	body, _ := json.Marshal(experiment)
+	resp := postJSON(t, ts, "/start-learning", body)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected status 200 for /start-learning, got %d", resp.StatusCode)
+	}
+	var res StartLearningResponse
+	if err := json.NewDecoder(resp.Body).Decode(&res); err != nil {
+		t.Fatalf("failed to decode /start-learning response: %v", err)
+	}
+	return experiment, []byte(res.CSR)
+}
+
+func startRelayingBody(t *testing.T, channel string, appKey util.APIKey, certPEM []byte) []byte {
+	t.Helper()
+	body, err := json.Marshal(StartRelayingRequest{Channel: channel, AppKey: appKey, Certificate: string(certPEM)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return body
+}
+
+func TestHTTPServer_StartLearning_ReturnsCSRWithoutConnecting(t *testing.T) {
+	s, ts := newTestServer(t)
+	experiment, csrPEM := startLearning(t, ts)
+
+	// the relay server binds the certificate to the client via the common name
+	if _, _, err := util.ParseClientCSR(csrPEM, experiment.ClientId.ToString()); err != nil {
+		t.Fatalf("expected a valid CSR for the client ID, got: %v", err)
+	}
+
+	channel, _ := shared.ChannelFromString(experiment.Channel)
+	orch, exists := s.flManager.flRuns[bridge.RunKey{Channel: channel, AppKey: experiment.AppKey}]
+	if !exists {
+		t.Fatal("expected run to be registered")
+	}
+	// no relay is reachable in this test, so the run can only still be in init if nothing connected
+	if orch.flRunHandle.GetState() != shared_enums.StateInit {
+		t.Fatalf("expected run to wait in init state, got state %d", orch.flRunHandle.GetState())
+	}
+
+	// The app can already send, messages wait in the queue for the relay connection
+	ok := orch.flRunHandle.SafeEnqueue(&bridge.OutgoingMessage{
+		Memo: []byte("c1"), MemoSize: 2,
+		ToAggregatorName: []byte("agg"), ToAggregatorNameSize: 3,
+		Payload: []byte("1"),
+	})
+	if !ok || orch.flRunHandle.Outgoing.Len() != 1 {
+		t.Fatal("expected message to be queued while the relay connection does not exist yet")
+	}
+}
+
+func TestHTTPServer_StartRelaying_Validation(t *testing.T) {
+	_, ts := newTestServer(t)
+	ch := newChannel(t).ToString()
+
+	expectStatus(t, postJSON(t, ts, "/start-relaying", []byte("not json")), http.StatusBadRequest)
+	expectStatus(t, postJSON(t, ts, "/start-relaying", startRelayingBody(t, "", "app", []byte("cert"))), http.StatusBadRequest)
+	expectStatus(t, postJSON(t, ts, "/start-relaying", startRelayingBody(t, ch, "", []byte("cert"))), http.StatusBadRequest)
+	expectStatus(t, postJSON(t, ts, "/start-relaying", startRelayingBody(t, ch, "app", nil)), http.StatusBadRequest)
+	expectStatus(t, postJSON(t, ts, "/start-relaying", startRelayingBody(t, ch, "app", []byte("cert"))), http.StatusNotFound)
+}
+
+// A certificate that was not signed for the CSR of this run must be refused, without
+// failing the run: the right certificate may still arrive.
+func TestHTTPServer_StartRelaying_RejectsCertificateForOtherKey(t *testing.T) {
+	s, ts := newTestServer(t)
+	experiment, _ := startLearning(t, ts)
+
+	ca, err := util.GenerateRunCA()
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, otherCSRPEM, err := util.GenerateClientCSR(experiment.ClientId.ToString())
+	if err != nil {
+		t.Fatal(err)
+	}
+	otherCSR, _, err := util.ParseClientCSR(otherCSRPEM, experiment.ClientId.ToString())
+	if err != nil {
+		t.Fatal(err)
+	}
+	otherCertPEM, err := ca.SignClientCSR(otherCSR)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, certPEM := range [][]byte{otherCertPEM, []byte("not a certificate")} {
+		resp := postJSON(t, ts, "/start-relaying", startRelayingBody(t, experiment.Channel, experiment.AppKey, certPEM))
+		expectStatus(t, resp, http.StatusBadRequest)
+	}
+
+	channel, _ := shared.ChannelFromString(experiment.Channel)
+	orch, exists := s.flManager.flRuns[bridge.RunKey{Channel: channel, AppKey: experiment.AppKey}]
+	if !exists || orch.flRunHandle.GetState() != shared_enums.StateInit {
+		t.Fatal("expected run to keep waiting for the right certificate")
+	}
+}
+
+// With the right certificate but no reachable relay server the run fails and is removed.
+func TestHTTPServer_StartRelaying_ConnectFailureRemovesRun(t *testing.T) {
+	s, ts := newTestServer(t)
+	experiment, csrPEM := startLearning(t, ts)
+
+	ca, err := util.GenerateRunCA()
+	if err != nil {
+		t.Fatal(err)
+	}
+	csr, _, err := util.ParseClientCSR(csrPEM, experiment.ClientId.ToString())
+	if err != nil {
+		t.Fatal(err)
+	}
+	certPEM, err := ca.SignClientCSR(csr)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	resp := postJSON(t, ts, "/start-relaying", startRelayingBody(t, experiment.Channel, experiment.AppKey, certPEM))
+	expectStatus(t, resp, http.StatusInternalServerError)
+
+	channel, _ := shared.ChannelFromString(experiment.Channel)
+	if _, exists := s.flManager.flRuns[bridge.RunKey{Channel: channel, AppKey: experiment.AppKey}]; exists {
+		t.Fatal("expected failed run to be removed")
 	}
 }

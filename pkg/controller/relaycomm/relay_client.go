@@ -2,12 +2,14 @@ package relaycomm
 
 import (
 	"crypto/tls"
+	"errors"
 	bridge "fc_controller/pkg/controller/bridge"
 	"fc_controller/pkg/controller/learningcomm"
 	models "fc_controller/pkg/controller/models"
 	shared_enums "fc_controller/pkg/shared/enums"
 	shared_link "fc_controller/pkg/shared/link"
 	logger "fc_controller/pkg/shared/logger"
+	shared_util "fc_controller/pkg/shared/util"
 	"fmt"
 	"net"
 	"strings"
@@ -80,6 +82,14 @@ type RelayClient struct {
 	// Contains config for encrypted TLS connection (nil is unencrypted)
 	tlsConfig *tls.Config
 
+	// PEM encoded private key and certificate signing request for the TLS client
+	// certificate (mTLS). The private key never leaves the controller.
+	clientKeyPEM []byte
+	csrPEM       []byte
+
+	// Serializes SetCertificate and StartClient, e.g. on concurrent /start-relaying requests
+	startMu sync.Mutex
+
 	// Socket connection to the global relay server
 	globalConnection *shared_link.TCPIO
 
@@ -96,6 +106,10 @@ type RelayClient struct {
 type smpcShardStore map[string]map[shared_link.ClientID][]models.SMPCMessageWrapper
 
 const LOCAL = "LOCAL"
+
+// ErrAlreadyStarted is returned by StartClient if the client already connected
+// (or the run is not waiting for a connection anymore).
+var ErrAlreadyStarted = errors.New("Client is already connected. Flow error")
 
 func NewClient(interval time.Duration, runHandle *bridge.FLRunHandle, appUrl string,
 	channel shared_link.RelayChannel, maxNumClients int,
@@ -127,7 +141,39 @@ func NewClient(interval time.Duration, runHandle *bridge.FLRunHandle, appUrl str
 		}
 	}
 
+	// The relay server binds the certificate to our client ID via the common name
+	var err error
+	s.clientKeyPEM, s.csrPEM, err = shared_util.GenerateClientCSR(runHandle.Meta.OwnClientId.ToString())
+	if err != nil {
+		return nil, fmt.Errorf("failed to create certificate signing request: %w", err)
+	}
+
 	return s, nil
+}
+
+// CSR returns the PEM encoded certificate signing request that the relay server
+// has to sign before this client can connect to it.
+func (c *RelayClient) CSR() []byte {
+	return c.csrPEM
+}
+
+// SetCertificate sets the PEM encoded client certificate signed by the relay server
+// for our CSR. Fails if the certificate does not belong to our private key.
+// Without TLS the certificate is only validated, as it cannot be presented.
+func (c *RelayClient) SetCertificate(certPEM []byte) error {
+	c.startMu.Lock()
+	defer c.startMu.Unlock()
+
+	cert, err := tls.X509KeyPair(certPEM, c.clientKeyPEM)
+	if err != nil {
+		return fmt.Errorf("certificate does not match the certificate signing request: %w", err)
+	}
+	if c.tlsConfig != nil {
+		c.tlsConfig.GetClientCertificate = func(*tls.CertificateRequestInfo) (*tls.Certificate, error) {
+			return &cert, nil
+		}
+	}
+	return nil
 }
 
 func (c *RelayClient) configureTLS(mode string, tlsMode string) error {
@@ -177,8 +223,11 @@ func (c *RelayClient) configureTLS(mode string, tlsMode string) error {
 // and starts the routine that queries the message queue for
 // outgoing messages to send to the global relay server
 func (c *RelayClient) StartClient() error {
+	c.startMu.Lock()
+	defer c.startMu.Unlock()
+
 	if c.runHandle.GetState() != shared_enums.StateInit || c.globalConnection != nil {
-		return fmt.Errorf("Client is already connected. Flow error")
+		return ErrAlreadyStarted
 	}
 
 	logger.Debug(RELAYCLIENT, "", "Connecting to %s...", c.globalAddress)
@@ -260,6 +309,12 @@ func (c *RelayClient) StartClient() error {
 
 	// WRITE OUT
 	go c.watchOutgoing()
+	// Messages may have been enqueued before the connection existed, make sure
+	// the watcher picks them up even if their notification is long gone.
+	select {
+	case c.runHandle.OutgoingNotify <- struct{}{}:
+	default:
+	}
 	return nil
 }
 

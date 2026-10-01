@@ -5,6 +5,7 @@ package http
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	nethttp "net/http"
 
@@ -35,6 +36,7 @@ func (s *RelayServiceHTTP) StartServer(port int) error {
 	r := mux.NewRouter()
 	r.HandleFunc("/healthz", s.handleHealthz).Methods(nethttp.MethodGet, nethttp.MethodHead)
 	r.HandleFunc("/create-fl-run", s.handleCreateFLRun).Methods(nethttp.MethodPost)
+	r.HandleFunc("/sign-fl-run-cert", s.handleSignFLRunCert).Methods(nethttp.MethodPost)
 	r.HandleFunc("/stop-fl-run", s.handleStopFLRun).Methods(nethttp.MethodPost)
 	logger.Info(GLOBAL, "", "HTTP API listening on port %d", port)
 
@@ -81,6 +83,9 @@ type createFLRunResponse struct {
 	RelayKey string `json:"relayKey"`
 }
 
+// handleCreateFLRun creates a new FL run
+// The FL run is persisted in the in memory FlRunStore
+// and returns the coordinator ID, client IDs, and their corresponding API keys.
 func (s *RelayServiceHTTP) handleCreateFLRun(w nethttp.ResponseWriter, r *nethttp.Request) {
 	defer r.Body.Close()
 	logger.Info(GLOBAL, "", "Received request to create FL run")
@@ -129,6 +134,74 @@ func (s *RelayServiceHTTP) handleCreateFLRun(w nethttp.ResponseWriter, r *nethtt
 	}
 
 	logger.Info(GLOBAL, "", "FL run created successfully: %+v", resp)
+}
+
+// ---------------------------------------------------------------------------
+// Sign FL Run client certificate
+// ---------------------------------------------------------------------------
+
+// maxSignRequestBytes limits the body of a sign request, a CSR is well below 1 KiB.
+const maxSignRequestBytes = 16 * 1024
+
+type signFLRunCertRequest struct {
+	Channel  string          `json:"channel"`
+	ClientID shared.ClientID `json:"clientId"`
+	// CSR is the PEM encoded certificate signing request of the client's controller.
+	CSR string `json:"csr"`
+}
+
+type signFLRunCertResponse struct {
+	// Certificate is the PEM encoded client certificate, signed by the CA of the FL run.
+	Certificate string `json:"certificate"`
+}
+
+// handleSignFLRunCert signs the CSR of a client with the CA of the FL run identified by
+// the channel. The client's controller needs the certificate to connect to the TCP relay.
+func (s *RelayServiceHTTP) handleSignFLRunCert(w nethttp.ResponseWriter, r *nethttp.Request) {
+	defer r.Body.Close()
+
+	var req signFLRunCertRequest
+	if err := json.NewDecoder(nethttp.MaxBytesReader(w, r.Body, maxSignRequestBytes)).Decode(&req); err != nil {
+		nethttp.Error(w, "invalid JSON body", nethttp.StatusBadRequest)
+		return
+	}
+
+	channel, err := shared.ChannelFromString(req.Channel)
+	if err != nil {
+		nethttp.Error(w, "invalid field channel", nethttp.StatusBadRequest)
+		return
+	}
+
+	flRun, exists := s.store.Get(channel)
+	if !exists {
+		nethttp.Error(w, "no FL run found for channel", nethttp.StatusNotFound)
+		return
+	}
+
+	certPEM, err := flRun.SignClientCert(req.ClientID, []byte(req.CSR))
+	if err != nil {
+		logger.Warn(GLOBAL, "", "Refused to sign certificate for client %s: %v", req.ClientID.ToString(), err)
+		switch {
+		case errors.Is(err, util.ErrInvalidCSR):
+			nethttp.Error(w, err.Error(), nethttp.StatusBadRequest)
+		case errors.Is(err, bridge.ErrUnknownClient), errors.Is(err, shared.ErrStopped):
+			nethttp.Error(w, "client does not belong to an active FL run", nethttp.StatusNotFound)
+		case errors.Is(err, bridge.ErrKeyAlreadyBound):
+			nethttp.Error(w, err.Error(), nethttp.StatusConflict)
+		default:
+			nethttp.Error(w, "failed to sign certificate", nethttp.StatusInternalServerError)
+		}
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(nethttp.StatusOK)
+	if err := json.NewEncoder(w).Encode(signFLRunCertResponse{Certificate: string(certPEM)}); err != nil {
+		logger.Error(GLOBAL, "", "failed to encode sign-fl-run-cert response: %v", err)
+		return
+	}
+
+	logger.Info(GLOBAL, "", "Signed certificate for client %s", req.ClientID.ToString())
 }
 
 // ---------------------------------------------------------------------------

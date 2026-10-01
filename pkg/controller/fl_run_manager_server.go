@@ -42,6 +42,7 @@ func NewFLRunManagerServiceHTTP(flrunmanagerport int, appcommv2port int, learnin
 
 	// More complex
 	r.HandleFunc("/start-learning", s.handleRequest(s.handleStartLearning)).Methods(http.MethodPost)
+	r.HandleFunc("/start-relaying", s.handleRequest(s.handleStartRelaying)).Methods(http.MethodPost)
 	r.HandleFunc("/stop-learning", s.handleRequest(s.handleStopLearning)).Methods(http.MethodPost)
 	s.server = &http.Server{
 		Addr:         fmt.Sprintf(":%d", flrunmanagerport),
@@ -112,14 +113,69 @@ func (s *FLRunManagerServiceHTTP) handleStartLearning(w http.ResponseWriter, r *
 		return models.ValidationError{Message: err.Error()}
 	}
 
-	err = s.flManager.StartRun(normalizedExperiment)
+	csrPEM, err := s.flManager.StartRun(normalizedExperiment)
 	if err != nil {
 		logger.Error(FLRUNMANAGERSERVICE, "", "Failed to start learning: %v", err)
 		return err
 	}
 
-	w.WriteHeader(http.StatusOK)
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(StartLearningResponse{CSR: string(csrPEM)})
+	return nil
+}
 
+type StartLearningResponse struct {
+	// CSR is the PEM encoded certificate signing request for the connection to the relay
+	// server. The signed certificate has to be passed to /start-relaying.
+	CSR string `json:"csr"`
+}
+
+type StartRelayingRequest struct {
+	Channel string      `json:"channel"`
+	AppKey  util.APIKey `json:"appKey"`
+	// Certificate is the PEM encoded certificate the relay server signed for the CSR
+	Certificate string `json:"certificate"`
+}
+
+// handleStartRelaying receives the signed certificate for the CSR returned by /start-learning
+// and connects the run to the relay server. Only returns 200 once connected.
+func (s *FLRunManagerServiceHTTP) handleStartRelaying(w http.ResponseWriter, r *http.Request) error {
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		return models.ValidationError{Message: "failed to read request body"}
+	}
+
+	var req StartRelayingRequest
+	if err := json.Unmarshal(body, &req); err != nil {
+		logger.Warn(FLRUNMANAGERSERVICE, "", "Failed to unmarshal start-relaying body: %v", err)
+		return models.ValidationError{Message: err.Error()}
+	}
+	if req.Channel == "" {
+		return models.ValidationError{Message: "channel must not be empty"}
+	}
+	if req.AppKey == "" {
+		return models.ValidationError{Message: "appKey must not be empty"}
+	}
+	if req.Certificate == "" {
+		return models.ValidationError{Message: "certificate must not be empty"}
+	}
+
+	channel, err := shared.ChannelFromString(req.Channel)
+	if err != nil {
+		return models.ValidationError{Message: fmt.Sprintf("invalid channel: %v", err)}
+	}
+
+	runKey := bridge.RunKey{
+		Channel: channel,
+		AppKey:  req.AppKey,
+	}
+
+	if err := s.flManager.StartRelaying(runKey, []byte(req.Certificate)); err != nil {
+		logger.Error(FLRUNMANAGERSERVICE, "", "Failed to start relaying: %v", err)
+		return err
+	}
+
+	w.WriteHeader(http.StatusOK)
 	return nil
 }
 
