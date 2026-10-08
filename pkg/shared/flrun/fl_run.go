@@ -8,7 +8,6 @@ import (
 
 	"fc_controller/pkg/shared/enums"
 	shared "fc_controller/pkg/shared/link"
-	"fc_controller/pkg/shared/logger"
 	"fc_controller/pkg/shared/util"
 )
 
@@ -208,14 +207,8 @@ func (fr *FlRunBase) IsCoordinatorID(clientID shared.ClientID) bool {
 func (fr *FlRunBase) coordinatorIsParticipant() bool {
 	for _, id := range fr.ClientIDOrder {
 		if id == fr.CoordinatorID {
-			if fr.AppVersion != enums.AppVersionV1 {
-				logger.Error(FLRUNHANDLE, "", "Coordinator ID is in ClientIDOrder but AppVersion is not v1")
-			}
 			return true
 		}
-	}
-	if fr.AppVersion == enums.AppVersionV1 {
-		logger.Error(FLRUNHANDLE, "", "AppVersion is v1 but Coordinator ID is not in ClientIDOrder")
 	}
 	return false
 }

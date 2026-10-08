@@ -8,13 +8,12 @@ import (
 type AppVersionEnum string
 
 const (
-	AppVersionV1 AppVersionEnum = "v1"
 	AppVersionV2 AppVersionEnum = "v2"
 )
 
 func (v AppVersionEnum) Validate() error {
 	switch v {
-	case AppVersionV1, AppVersionV2:
+	case AppVersionV2:
 		return nil
 	default:
 		return fmt.Errorf("unsupported app version: %s", v)
@@ -23,8 +22,6 @@ func (v AppVersionEnum) Validate() error {
 
 func StringToAppVersionEnum(s string) (AppVersionEnum, error) {
 	switch s {
-	case "v1":
-		return AppVersionV1, nil
 	case "v2":
 		return AppVersionV2, nil
 	default:

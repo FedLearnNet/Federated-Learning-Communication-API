@@ -69,10 +69,6 @@ func newFlRun(maxNumClients int, appVersion enums.AppVersionEnum) (*FlRunMeta, e
 	var err error
 
 	switch appVersion {
-	case enums.AppVersionV1:
-		// In v1 the coordinator is also a client; promote the last entry.
-		coordinatorID = clientIDs[len(clientIDs)-1]
-		coordinatorKey = clientId2ClientKey[coordinatorID]
 	case enums.AppVersionV2:
 		coordinatorID, err = shared.NewClientID()
 		if err != nil {

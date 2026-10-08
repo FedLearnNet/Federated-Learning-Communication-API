@@ -74,24 +74,6 @@ func TestValidateClientMapAgainstOrder(t *testing.T) {
 	}
 }
 
-func TestFlRun_IsSetupComplete_V1(t *testing.T) {
-	// v1: coordinator is also in ClientIDOrder
-	coordID := makeClientID(1)
-	_, pubKey := makeKeyPair(t)
-
-	fr := NewFlRun(makeChannel("ch"), coordID, []shared.ClientID{coordID}, 1, "", enums.AppVersionV1)
-	if fr.IsSetupComplete() {
-		t.Error("should not be complete before any key is set")
-	}
-	if err := fr.SetPublicKey(coordID, pubKey); err != nil {
-		t.Fatalf("SetPublicKey: %v", err)
-	}
-	// In v1, coordinator key goes to both CoordinatorPublicKey and ClientId2PublicKey.
-	if !fr.IsSetupComplete() {
-		t.Error("expected setup complete after coordinator (v1) key set")
-	}
-}
-
 func TestFlRun_IsSetupComplete_V2(t *testing.T) {
 	// v2: coordinator is NOT in ClientIDOrder; two separate clients are.
 	coordID := makeClientID(0)

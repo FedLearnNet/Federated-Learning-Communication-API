@@ -79,10 +79,6 @@ func (flManager *FLRunManagerBo) StartRun(experiment *models.NormalizedFLExperim
 	}
 
 	switch experiment.AppVersion {
-	case shared_enums.AppVersionV1:
-		logger.Error(FLRUNMANAGERBO, experiment.RunId, "App version v1 is currently not supported")
-		return nil, fmt.Errorf("app version v1 is currently not supported")
-
 	case shared_enums.AppVersionV2:
 		meta, err := bridge.NewFlRunMeta(
 			experiment.Channel,
