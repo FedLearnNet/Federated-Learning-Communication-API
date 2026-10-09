@@ -238,7 +238,7 @@ func generateSelfSignedTLSConfig(mode string, tlsPublicCertPath *string, tlsPriv
 			}
 		}
 		if len(dnsNames) == 0 {
-			return nil, errors.New("no valid domain names provided for self-signed certificate.")
+			return nil, errors.New("no valid domain names provided for self-signed certificate")
 		}
 
 		tml := &x509.Certificate{
@@ -431,7 +431,7 @@ func (s *RelayServiceTCP) handleClientRegistration(conn net.Conn) error {
 	})
 	if err != nil {
 		logger.Error(GLOBALTCP, "", "Error reading connection setup header: %v", err)
-		return errors.New("Failed to read connection setup header")
+		return errors.New("failed to read connection setup header")
 	}
 
 	logger.Debug(GLOBALTCP, "", "Succesfully read connection setup header: %+v", authHeader)
@@ -499,7 +499,7 @@ func (s *RelayServiceTCP) relayMessages(clientId shared.ClientID, flRun *bridge.
 	isCoordinator := flRun.IsCoordinator(clientId)
 	localServerConn, exists := flRun.Connections[clientId]
 	if !exists {
-		return errors.New("Client connection not found")
+		return errors.New("client connection not found")
 	}
 	if isCoordinator {
 		logger.Info(GLOBALTCP, "", "Starting to relay messages for Coordinator (ID: %s)", clientId.ToString())
@@ -567,11 +567,11 @@ func (s *RelayServiceTCP) relayMessages(clientId shared.ClientID, flRun *bridge.
 		case shared.CMD_SEND_PUBLIC_KEYS:
 			unlockRead()
 			logger.Error(GLOBALTCP, "", "Unsupported command byte %d from client %s", cmd, clientId.ToString())
-			return errors.New("Unsupported command byte")
+			return errors.New("unsupported command byte")
 		default:
 			unlockRead()
 			logger.Error(GLOBALTCP, "", "Unknown command byte %d from client %s", cmd, clientId.ToString())
-			return errors.New("Unknown command byte")
+			return errors.New("unknown command byte")
 		}
 
 		if handlerErr != nil {
@@ -812,9 +812,7 @@ func (s *RelayServiceTCP) waitForConnection(flRun *bridge.FlRunMeta, clientID sh
 		if !flRun.IsActive() {
 			return nil, shared.ErrStopped
 		}
-		select {
-		case <-ticker.C:
-		}
+		<-ticker.C
 	}
 }
 

@@ -138,8 +138,8 @@ func TestPtrStringChanged(t *testing.T) {
 func TestTCPIO_Lifecycle(t *testing.T) {
 	// Use a pipe to simulate a real net.Conn
 	c1, c2 := net.Pipe()
-	defer c1.Close()
-	defer c2.Close()
+	defer func() { _ = c1.Close() }()
+	defer func() { _ = c2.Close() }()
 
 	// Create a shared state (normally owned by FLRunHandle)
 	var state atomic.Uint32
@@ -164,7 +164,9 @@ func TestTCPIO_Lifecycle(t *testing.T) {
 	}
 
 	// Test Close
-	io.Close()
+	if err := io.Close(); err != nil {
+		t.Errorf("Failed to close TCPIO: %v", err)
+	}
 	if _, err := io.LockHeaderRead(); err == nil {
 		t.Error("Expected error locking a closed TCPIO")
 	}

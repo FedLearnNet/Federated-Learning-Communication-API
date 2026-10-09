@@ -12,7 +12,7 @@ func TestParseCPointFromHex(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !pub.CPoint.Equal(r2) {
+	if !pub.Equal(r2) {
 		t.Fatal()
 	}
 }
@@ -28,7 +28,7 @@ func TestCPoint_MarshalJSON(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !pub.CPoint.Equal(r2) {
+	if !pub.Equal(r2) {
 		t.Fatal()
 	}
 }

@@ -87,7 +87,7 @@ type createFLRunResponse struct {
 // The FL run is persisted in the in memory FlRunStore
 // and returns the coordinator ID, client IDs, and their corresponding API keys.
 func (s *RelayServiceHTTP) handleCreateFLRun(w nethttp.ResponseWriter, r *nethttp.Request) {
-	defer r.Body.Close()
+	defer func() { _ = r.Body.Close() }()
 	logger.Info(GLOBAL, "", "Received request to create FL run")
 	var req createFLRunRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -123,7 +123,7 @@ func (s *RelayServiceHTTP) handleCreateFLRun(w nethttp.ResponseWriter, r *nethtt
 		ClientIDs:          flRun.ClientIDOrder,
 		ClientId2ClientKey: clientId2ClientKey,
 		Channel:            flRun.Channel.ToString(),
-		RelayKey:           flRun.FlRunBase.RelayKey.String(),
+		RelayKey:           flRun.RelayKey.String(),
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -158,7 +158,7 @@ type signFLRunCertResponse struct {
 // handleSignFLRunCert signs the CSR of a client with the CA of the FL run identified by
 // the channel. The client's controller needs the certificate to connect to the TCP relay.
 func (s *RelayServiceHTTP) handleSignFLRunCert(w nethttp.ResponseWriter, r *nethttp.Request) {
-	defer r.Body.Close()
+	defer func() { _ = r.Body.Close() }()
 
 	var req signFLRunCertRequest
 	if err := json.NewDecoder(nethttp.MaxBytesReader(w, r.Body, maxSignRequestBytes)).Decode(&req); err != nil {
@@ -215,7 +215,7 @@ type stopFLRunRequest struct {
 // handleStopFLRun removes the run from the store and signals all relay goroutines
 // for that run to exit cleanly via FlRunMeta.Stop() → state set to finished → goroutines exit.
 func (s *RelayServiceHTTP) handleStopFLRun(w nethttp.ResponseWriter, r *nethttp.Request) {
-	defer r.Body.Close()
+	defer func() { _ = r.Body.Close() }()
 
 	var req stopFLRunRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {

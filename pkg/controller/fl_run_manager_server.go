@@ -22,10 +22,9 @@ const WRITETIMEOUT = 180 * time.Second
 const FLRUNMANAGERSERVICE = "FL_RUN_MANAGER_SERVICE" // for logging
 
 type FLRunManagerServiceHTTP struct {
-	port          int
-	server        *http.Server
-	flManager     *FLRunManagerBo
-	queryInterval time.Duration
+	port      int
+	server    *http.Server
+	flManager *FLRunManagerBo
 }
 
 func NewFLRunManagerServiceHTTP(flrunmanagerport int, appcommv2port int, learningAPIWSBaseUrl string, globalAddress string, mode string, tlsMode string) *FLRunManagerServiceHTTP {
@@ -93,7 +92,7 @@ func (s *FLRunManagerServiceHTTP) handleHealthz(w http.ResponseWriter, r *http.R
 }
 
 func (s *FLRunManagerServiceHTTP) handleIndex(w http.ResponseWriter, r *http.Request) {
-	w.Write([]byte("Hello from FedDB-FeatureCloud Controller!"))
+	_, _ = w.Write([]byte("Hello from FedDB-FeatureCloud Controller!"))
 }
 
 func (s *FLRunManagerServiceHTTP) handleStartLearning(w http.ResponseWriter, r *http.Request) error {

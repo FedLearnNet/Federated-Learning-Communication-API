@@ -4,7 +4,6 @@ import (
 	"crypto/tls"
 	"errors"
 	bridge "fc_controller/pkg/controller/bridge"
-	"fc_controller/pkg/controller/learningcomm"
 	models "fc_controller/pkg/controller/models"
 	shared_enums "fc_controller/pkg/shared/enums"
 	shared_link "fc_controller/pkg/shared/link"
@@ -76,9 +75,6 @@ type RelayClient struct {
 		Internal variables
 	*/
 
-	// Callback function to update information whenever the app progress, app status or app message changes
-	updateCB learningcomm.UpdateCB
-
 	// Contains config for encrypted TLS connection (nil is unencrypted)
 	tlsConfig *tls.Config
 
@@ -109,7 +105,7 @@ const LOCAL = "LOCAL"
 
 // ErrAlreadyStarted is returned by StartClient if the client already connected
 // (or the run is not waiting for a connection anymore).
-var ErrAlreadyStarted = errors.New("Client is already connected. Flow error")
+var ErrAlreadyStarted = errors.New("client is already connected, flow error")
 
 func NewClient(interval time.Duration, runHandle *bridge.FLRunHandle, appUrl string,
 	channel shared_link.RelayChannel, maxNumClients int,
@@ -321,7 +317,9 @@ func (c *RelayClient) StartClient() error {
 // Stop shuts down the relay client by closing the connection itself
 func (c *RelayClient) Stop() {
 	if c.globalConnection != nil {
-		c.globalConnection.Stop()
+		if err := c.globalConnection.Stop(); err != nil {
+			logger.Warn(RELAYCLIENT, "", "Error closing connection to global relay: %v", err)
+		}
 		c.globalConnection = nil
 	}
 }

@@ -271,7 +271,7 @@ func startLearning(t *testing.T, ts *httptest.Server) (models.FLExperiment, []by
 	}
 	body, _ := json.Marshal(experiment)
 	resp := postJSON(t, ts, "/start-learning", body)
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("expected status 200 for /start-learning, got %d", resp.StatusCode)
 	}

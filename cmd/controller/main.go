@@ -114,7 +114,9 @@ func main() {
 		logger.Info(MAIN, "", "Received signal %v, shutting down gracefully...", sig)
 
 		// 5. Call your shutdown logic
-		run_manager.Shutdown()
+		if err := run_manager.Shutdown(); err != nil {
+			logger.Error(MAIN, "", "Error during shutdown: %v", err)
+		}
 	}
 
 	logger.Info(MAIN, "", "Application exited.")

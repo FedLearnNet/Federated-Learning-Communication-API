@@ -64,7 +64,7 @@ func LoadConfig(configPath string, defaultConfig interface{}, cliConfig interfac
 func PrintConfig(cfg interface{}) {
 	fmt.Println("\nLoaded Configuration:")
 	v := reflect.ValueOf(cfg)
-	if v.Kind() == reflect.Ptr {
+	if v.Kind() == reflect.Pointer {
 		v = v.Elem()
 	}
 	printStructFields(v, "")
@@ -76,7 +76,7 @@ func formatValue(v reflect.Value) string {
 	}
 
 	switch v.Kind() {
-	case reflect.Ptr, reflect.Interface:
+	case reflect.Pointer, reflect.Interface:
 		if v.IsNil() {
 			return "<nil>"
 		}
@@ -117,7 +117,7 @@ func printStructFields(v reflect.Value, indent string) {
 			printStructFields(field, indent+"  ")
 			continue
 		}
-		if field.Kind() == reflect.Ptr && !field.IsNil() && field.Elem().Kind() == reflect.Struct {
+		if field.Kind() == reflect.Pointer && !field.IsNil() && field.Elem().Kind() == reflect.Struct {
 			fmt.Printf("%s%s:\n", indent, name)
 			printStructFields(field.Elem(), indent+"  ")
 			continue
@@ -135,7 +135,7 @@ func applyEnvVars(cfg interface{}) {
 
 	v := reflect.ValueOf(cfg)
 	// If it's a pointer, get the element
-	if v.Kind() == reflect.Ptr {
+	if v.Kind() == reflect.Pointer {
 		v = v.Elem()
 	}
 
@@ -172,7 +172,7 @@ func applyEnvVarsToStruct(v reflect.Value) {
 			continue
 		}
 
-		if field.Kind() == reflect.Ptr {
+		if field.Kind() == reflect.Pointer {
 			if field.IsNil() {
 				field.Set(reflect.New(field.Type().Elem()))
 			}
