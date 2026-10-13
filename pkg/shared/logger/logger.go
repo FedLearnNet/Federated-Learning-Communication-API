@@ -106,7 +106,11 @@ func createLogFile(filePath string) {
 	if err != nil {
 		logger.Fatalf("error creating log directory: %v", err)
 	}
-	os.Create(filePath)
+	f, err := os.Create(filePath)
+	if err != nil {
+		logger.Fatalf("error creating log file: %v", err)
+	}
+	_ = f.Close()
 }
 
 func changeOutputSettingsToFile() {

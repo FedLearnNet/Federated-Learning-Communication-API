@@ -1,6 +1,6 @@
 module fc_controller
 
-go 1.26
+go 1.26.9
 
 require (
 	github.com/gorilla/mux v1.7.4
@@ -8,7 +8,7 @@ require (
 )
 
 require (
-	github.com/golang/glog v0.0.0-20160126235308-23def4e6c14b // indirect
+	github.com/golang/glog v1.2.4 // indirect
 	github.com/konsorten/go-windows-terminal-sequences v1.0.1 // indirect
 	github.com/x448/float16 v0.8.4 // indirect
 	golang.org/x/exp v0.0.0-20190125153040-c74c464bbbf2 // indirect

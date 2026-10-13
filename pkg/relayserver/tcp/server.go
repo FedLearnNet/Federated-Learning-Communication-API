@@ -155,6 +155,10 @@ func buildTLSConfigFromPair(certPEM []byte, keyPEM []byte, mode string, tlsDomai
 	tlsConfig := &tls.Config{
 		Rand:         rand.Reader,
 		Certificates: []tls.Certificate{tlsCert},
+		// mTLS: each FL run has its own CA and the run is only known once the connection
+		// setup header was read, so the handshake just demands a certificate (and proof of
+		// its private key). handleClientRegistration verifies it against the run's CA.
+		ClientAuth: tls.RequireAnyClientCert,
 	}
 	if minVersion != nil {
 		tlsConfig.MinVersion = *minVersion
@@ -234,7 +238,7 @@ func generateSelfSignedTLSConfig(mode string, tlsPublicCertPath *string, tlsPriv
 			}
 		}
 		if len(dnsNames) == 0 {
-			return nil, errors.New("no valid domain names provided for self-signed certificate.")
+			return nil, errors.New("no valid domain names provided for self-signed certificate")
 		}
 
 		tml := &x509.Certificate{
@@ -389,8 +393,26 @@ func (s *RelayServiceTCP) Shutdown() {
 	}
 }
 
+// verifyClientCert checks that the TLS client certificate of conn was signed by the CA of
+// the FL run for exactly this client. Must be called after the TLS handshake completed,
+// e.g. after the first read. Without TLS there is no certificate and nothing is checked.
+func (s *RelayServiceTCP) verifyClientCert(conn net.Conn, flRun *bridge.FlRunMeta, clientID shared.ClientID) error {
+	if s.tlsMode == "off" {
+		return nil
+	}
+	tlsConn, ok := conn.(*tls.Conn)
+	if !ok {
+		return errors.New("connection is not a TLS connection")
+	}
+	peerCerts := tlsConn.ConnectionState().PeerCertificates
+	if len(peerCerts) == 0 {
+		return errors.New("no client certificate presented")
+	}
+	return flRun.CA.VerifyClientCert(peerCerts[0], clientID.ToString())
+}
+
 // handleClientRegistration reads the connection setup header, authenticates the
-// client against the matching FL run, responds with the relay key for mutual auth,
+// client against the matching FL run (TLS client certificate and client key), responds with the relay key for mutual auth,
 // registers the connection, and starts a relay goroutine.
 // Does NOT close the connection on failure.
 func (s *RelayServiceTCP) handleClientRegistration(conn net.Conn) error {
@@ -409,7 +431,7 @@ func (s *RelayServiceTCP) handleClientRegistration(conn net.Conn) error {
 	})
 	if err != nil {
 		logger.Error(GLOBALTCP, "", "Error reading connection setup header: %v", err)
-		return errors.New("Failed to read connection setup header")
+		return errors.New("failed to read connection setup header")
 	}
 
 	logger.Debug(GLOBALTCP, "", "Succesfully read connection setup header: %+v", authHeader)
@@ -418,6 +440,10 @@ func (s *RelayServiceTCP) handleClientRegistration(conn net.Conn) error {
 	if !exists {
 		logger.Error(GLOBALTCP, "", "AUTH ERROR: No FL run found for channel %s", authHeader.Channel.ToString())
 		return errors.New("no FL run found for channel")
+	}
+	if err := s.verifyClientCert(conn, flRun, authHeader.ClientID); err != nil {
+		logger.Error(GLOBALTCP, "", "AUTH ERROR: Client %s has no valid client certificate: %v", authHeader.ClientID.ToString(), err)
+		return errors.New("client certificate not valid")
 	}
 	if !flRun.Authenticate(authHeader.ClientID, authHeader.ClientKey) {
 		logger.Error(GLOBALTCP, "", "AUTH ERROR: Client %s not authenticated", authHeader.ClientID.ToString())
@@ -473,7 +499,7 @@ func (s *RelayServiceTCP) relayMessages(clientId shared.ClientID, flRun *bridge.
 	isCoordinator := flRun.IsCoordinator(clientId)
 	localServerConn, exists := flRun.Connections[clientId]
 	if !exists {
-		return errors.New("Client connection not found")
+		return errors.New("client connection not found")
 	}
 	if isCoordinator {
 		logger.Info(GLOBALTCP, "", "Starting to relay messages for Coordinator (ID: %s)", clientId.ToString())
@@ -541,11 +567,11 @@ func (s *RelayServiceTCP) relayMessages(clientId shared.ClientID, flRun *bridge.
 		case shared.CMD_SEND_PUBLIC_KEYS:
 			unlockRead()
 			logger.Error(GLOBALTCP, "", "Unsupported command byte %d from client %s", cmd, clientId.ToString())
-			return errors.New("Unsupported command byte")
+			return errors.New("unsupported command byte")
 		default:
 			unlockRead()
 			logger.Error(GLOBALTCP, "", "Unknown command byte %d from client %s", cmd, clientId.ToString())
-			return errors.New("Unknown command byte")
+			return errors.New("unknown command byte")
 		}
 
 		if handlerErr != nil {
@@ -786,9 +812,7 @@ func (s *RelayServiceTCP) waitForConnection(flRun *bridge.FlRunMeta, clientID sh
 		if !flRun.IsActive() {
 			return nil, shared.ErrStopped
 		}
-		select {
-		case <-ticker.C:
-		}
+		<-ticker.C
 	}
 }
 

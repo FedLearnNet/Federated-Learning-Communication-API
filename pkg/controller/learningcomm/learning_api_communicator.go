@@ -3,12 +3,10 @@
 package learningcomm
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -16,7 +14,6 @@ import (
 	"github.com/gorilla/websocket"
 
 	"fc_controller/pkg/controller/bridge"
-	"fc_controller/pkg/controller/models"
 	"fc_controller/pkg/shared/logger"
 )
 
@@ -178,151 +175,6 @@ func (m *LearningAPIClient) startWSReader(runId string, c *websocket.Conn) {
 		}
 		logger.Debug(LEARNING_API, runId, "WS recv type=%d len=%d preview=%q",
 			mt, len(message), preview(message, 256))
-	}
-}
-
-/*
-	CONTROLLER --> LEARNING API (app v1 only)
-*/
-
-// Based on the msgType sends the relevant message to the LearningAPI
-// does NOT automatically log, has to be called once for logging and once for informing the LearningAPI
-func (m *LearningAPIClient) sendAppState(runId string, message *string, progress *float64, status *string, msgType AppMessageTypeEnum) {
-	switch msgType {
-	case UpdateRun:
-		var currentStatus string
-		if status != nil {
-			currentStatus = strings.ToUpper(*status)
-		}
-		if currentStatus == "" {
-			logger.Warn(LEARNING_API, runId, "No status provided in UpdateRun; skipping state update")
-			return
-		}
-
-		currentProgress := progress
-		if progress == nil {
-			var defaultProgress float64 = 0.0
-			currentProgress = &defaultProgress
-			logger.Warn(LEARNING_API, runId, "No progress provided in UpdateRun, using default progress: %f", *currentProgress)
-		}
-
-		logger.Debug(LEARNING_API, runId, "UpdateRun: currentStatus=%s currentProgress=%f", currentStatus, *currentProgress)
-		m.sendStateUpdate(runId, message, currentProgress, &currentStatus)
-		if currentStatus == "FINISHED" || currentStatus == "ERROR" {
-			// cleanup
-			m.closeConnection(runId)
-			return
-		}
-	case LogMessage:
-		// Forward log messages to the Learning API. Derive severity from state
-		msgStr := "no message"
-		if message != nil {
-			msgStr = *message
-		}
-		sev := "INFO"
-		if status != nil && strings.ToUpper(*status) == "ERROR" {
-			sev = "ERROR"
-		}
-		m.sendLogMessage(runId, sev, msgStr, nil, nil, nil)
-	default:
-		logger.Warn(LEARNING_API, runId, "Unknown msgType in sendAppState: %s", msgType)
-	}
-}
-
-func (m *LearningAPIClient) sendStateUpdate(runId string, message *string, progress *float64, status *string) {
-	logger.Debug(LEARNING_API, runId, "Sending state update")
-	runIdNr, err := strconv.ParseInt(runId, 10, 64)
-	if err != nil {
-		logger.Error(LEARNING_API, runId, "invalid runId: %s", err)
-		return
-	}
-
-	if status == nil || *status == "" {
-		logger.Warn(LEARNING_API, runId, "No status provided in state update; skipping state update")
-		return
-	}
-	statusStr := *status
-
-	var errorMsg *string
-	if statusStr == "ERROR" {
-		if message != nil {
-			errorMsg = message
-		} else {
-			msg := "An error occurred"
-			errorMsg = &msg
-		}
-	}
-	dto := models.UpdateRunDTO{
-		RunId:    runIdNr,
-		Status:   statusStr,
-		Error:    errorMsg,
-		Progress: progress,
-	}
-
-	wrapper := AppMessageWrapper{
-		Type:    UpdateRun,
-		Message: dto,
-		RunType: FederatedRun,
-	}
-	m.sendWrapped(runId, wrapper)
-}
-
-func (m *LearningAPIClient) sendLogMessage(runId string, severity, msg string, caller, stackTrace, group *string) {
-	logger.Debug(LEARNING_API, runId, "Sending log message: %s", msg)
-	runIdNr, err := strconv.ParseInt(runId, 10, 64)
-	if err != nil {
-		logger.Error(LEARNING_API, runId, "invalid runId: %s", err)
-		return
-	}
-
-	dto := models.RunMessageLogDTO{
-		RunId:      runIdNr,
-		Severity:   severity,
-		Message:    msg,
-		Caller:     caller,
-		StackTrace: stackTrace,
-		Group:      group,
-	}
-
-	wrapper := AppMessageWrapper{
-		Type:    LogMessage,
-		Message: dto,
-		RunType: FederatedRun,
-	}
-	m.sendWrapped(runId, wrapper)
-}
-
-func (w *LearningAPIClient) sendWrapped(runId string, wrapper AppMessageWrapper) {
-	b, err := json.Marshal(wrapper)
-	if err != nil {
-		logger.Error(LEARNING_API, runId, "JSON marshal error: %v", err)
-		return
-	}
-
-	logger.Debug(LEARNING_API, runId, "WS send type=%s bytes=%d preview=%q",
-		wrapper.Type, len(b), preview(b, 256))
-
-	// serialize writes
-	w.wsMutex.Lock()
-	defer w.wsMutex.Unlock()
-
-	if w.wsConn == nil {
-		logger.Error(LEARNING_API, runId, "No WS connection for run; dropping message type=%s", wrapper.Type)
-		return
-	}
-
-	if err := w.wsConn.WriteMessage(websocket.TextMessage, b); err != nil {
-		var ne net.Error
-		switch {
-		case errors.Is(err, io.EOF):
-			logger.Warn(LEARNING_API, runId, "Write EOF: peer closed connection")
-		case errors.As(err, &ne) && ne.Timeout():
-			logger.Warn(LEARNING_API, runId, "Write timeout: %v", err)
-		case websocket.IsCloseError(err):
-			logger.Warn(LEARNING_API, runId, "Write close error: %v", err)
-		default:
-			logger.Error(LEARNING_API, runId, "Websocket write error: %v", err)
-		}
 	}
 }
 

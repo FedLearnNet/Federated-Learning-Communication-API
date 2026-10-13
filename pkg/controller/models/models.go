@@ -153,30 +153,17 @@ func (e *FLExperiment) Normalize() (*NormalizedFLExperiment, error) {
 		return nil, fmt.Errorf("appVersion invalid: %w", err)
 	}
 
-	// --- App v1 fields: required when AppVersion is v1, forbidden otherwise ---
+	// --- Certain fields are legacy for app v1 and forbidden for app v2 ---
 	var appControlUrlString string // to satisfy the type system, this value is not used when AppVersion != v1
-	if e.AppVersion == shared_enums.AppVersionV1 {
-		if e.AppControlURL == nil || *e.AppControlURL == "" {
-			return nil, errors.New("appControlUrl is required for app v1")
-		}
-		appControlUrlString = *e.AppControlURL
-		if e.LearningApiWsSuffixURL == nil || *e.LearningApiWsSuffixURL == "" {
-			return nil, errors.New("learningApiWsSuffixURL is required for app v1")
-		}
-		if e.LearningApiWsToken == nil || *e.LearningApiWsToken == "" {
-			return nil, errors.New("learningApiWsToken is required for app v1")
-		}
-	} else {
-		if e.AppControlURL != nil {
-			return nil, errors.New("appControlUrl must not be set for app v2")
-		}
-		appControlUrlString = "" // to satisfy the type system, this value is not used when AppVersion != v1
-		if e.LearningApiWsSuffixURL != nil {
-			return nil, errors.New("learningApiWsSuffixURL must not be set for app v2")
-		}
-		if e.LearningApiWsToken != nil {
-			return nil, errors.New("learningApiWsToken must not be set for app v2")
-		}
+	if e.AppControlURL != nil {
+		return nil, errors.New("appControlUrl must not be set for app v2")
+	}
+	appControlUrlString = "" // to satisfy the type system, this value is not used when AppVersion != v1
+	if e.LearningApiWsSuffixURL != nil {
+		return nil, errors.New("learningApiWsSuffixURL must not be set for app v2")
+	}
+	if e.LearningApiWsToken != nil {
+		return nil, errors.New("learningApiWsToken must not be set for app v2")
 	}
 
 	// --- Generate the key pair for this client ---

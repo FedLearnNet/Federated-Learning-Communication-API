@@ -74,8 +74,21 @@ def create_fl_run_on_relay(num_clients=NUM_CLIENTS):
     return response.json()
 
 
-def start_learning_on_controller(client_id, client_key, run_info):
-    """Register one participant (client or coordinator) with the controller."""
+def sign_csr_on_relay(channel, client_id, csr):
+    """Ask the relay to sign a CSR with the FL run's CA. Returns the raw response."""
+    return requests.post(
+        RELAY_ADDRESS_HTTP + "/sign-fl-run-cert",
+        json={"channel": channel, "clientId": client_id, "csr": csr},
+        timeout=20,
+    )
+
+
+def start_learning_on_controller(client_id, client_key, run_info, app_key=None):
+    """Register one participant (client or coordinator) with the controller.
+
+    Returns the CSR (PEM) for the participant's relay connection, or None on failure.
+    The controller only connects to the relay once start_relaying_on_controller is called.
+    """
     response = requests.post(
         CONTROLLER_ADDRESS_ORCH_HTTP + "/start-learning",
         json={
@@ -87,7 +100,7 @@ def start_learning_on_controller(client_id, client_key, run_info):
             "coordinatorId": run_info["coordinatorId"],
             "maxNumClients": run_info.get("maxNumClients", NUM_CLIENTS),
             "orderClientIds": run_info["clientIds"],
-            "appKey": client_id,
+            "appKey": app_key or client_id,
             "appVersion": "v2",
         },
         timeout=20,
@@ -95,8 +108,35 @@ def start_learning_on_controller(client_id, client_key, run_info):
     label = "coordinator" if client_id == run_info["coordinatorId"] else f"client {client_id}"
     if response.status_code == 200:
         print(f"  start-learning OK for {label}")
-    else:
-        print(f"  start-learning FAIL for {label}: {response.status_code} - {response.text}")
+        return response.json()["csr"]
+    print(f"  start-learning FAIL for {label}: {response.status_code} - {response.text}")
+    return None
+
+
+def start_relaying_on_controller(client_id, channel, certificate, app_key=None):
+    """Hand the signed certificate to the controller, which then connects to the relay."""
+    return requests.post(
+        CONTROLLER_ADDRESS_ORCH_HTTP + "/start-relaying",
+        json={"channel": channel, "appKey": app_key or client_id, "certificate": certificate},
+        timeout=20,
+    )
+
+
+def connect_participant(client_id, client_key, run_info):
+    """Full start flow of one participant: start learning, get the CSR signed, start relaying."""
+    channel = run_info["channel"]
+    csr = start_learning_on_controller(client_id, client_key, run_info)
+    if csr is None:
+        exit(1)
+    response = sign_csr_on_relay(channel, client_id, csr)
+    if response.status_code != 200:
+        print(f"  FAIL: sign-fl-run-cert for {client_id}: {response.status_code} - {response.text}")
+        exit(1)
+    response = start_relaying_on_controller(client_id, channel, response.json()["certificate"])
+    if response.status_code != 200:
+        print(f"  FAIL: start-relaying for {client_id}: {response.status_code} - {response.text}")
+        exit(1)
+    print(f"  start-relaying OK for {client_id}")
 
 
 def setup_fl_run(num_clients=NUM_CLIENTS):
@@ -107,9 +147,9 @@ def setup_fl_run(num_clients=NUM_CLIENTS):
     run_info = create_fl_run_on_relay(num_clients)
     for client_id in run_info["clientIds"]:
         client_key = run_info["clientId2ClientKey"][client_id]
-        start_learning_on_controller(client_id, client_key, run_info)
+        connect_participant(client_id, client_key, run_info)
     coordinator_key = run_info["coordinatorKey"]
-    start_learning_on_controller(run_info["coordinatorId"], coordinator_key, run_info)
+    connect_participant(run_info["coordinatorId"], coordinator_key, run_info)
     # Allow TCP connections and key exchange to settle.
     time.sleep(0.5)
     return run_info
@@ -893,6 +933,92 @@ for msg in p2p_msgs:
         exit(1)
 print(f"  client_3 received {len(p2p_msgs)} P2P messages with data {[msg['data'] for msg in p2p_msgs]}")
 print("Peer-to-peer test PASSED")
+
+
+# =============================================
+# CLIENT CERTIFICATE (mTLS) TEST
+# Each controller only connects to the relay once the relay signed its CSR.
+# - messages sent before the relay connection exists are queued and delivered afterwards
+# - the relay only signs CSRs of participants of the run, and only one key per participant
+# - the controller refuses certificates that do not belong to its CSR
+# =============================================
+print("\n--- Client certificate test (fresh FL run) ---")
+MTLS_COMM_ID = "mtls_queued_before_connect"
+AGGREGATOR_MTLS = "aggregator_mtls"
+MTLS_DATA = 4711
+mtls_run = create_fl_run_on_relay(2)
+mtls_run["maxNumClients"] = 2
+mtls_channel = mtls_run["channel"]
+mtls_coord = mtls_run["coordinatorId"]
+mtls_client_1, mtls_client_2 = mtls_run["clientIds"]
+
+connect_participant(mtls_coord, mtls_run["coordinatorKey"], mtls_run)
+connect_participant(mtls_client_2, mtls_run["clientId2ClientKey"][mtls_client_2], mtls_run)
+
+csr_1 = start_learning_on_controller(mtls_client_1, mtls_run["clientId2ClientKey"][mtls_client_1], mtls_run)
+if csr_1 is None:
+    exit(1)
+
+# Not connected to the relay yet, the message has to wait in the controller's queue
+status = send_to_aggregator(mtls_client_1, mtls_channel, MTLS_DATA, AGGREGATOR_MTLS, comm_id=MTLS_COMM_ID)
+if status != 200:
+    print(f"  FAIL: expected 200 when sending before the relay connection exists, got {status}")
+    exit(1)
+
+response = sign_csr_on_relay(mtls_channel, "ffffffffffffffff", csr_1)
+if response.status_code != 400 and response.status_code != 404:
+    print(f"  FAIL: expected relay to refuse signing for an unknown client, got {response.status_code}")
+    exit(1)
+print("  Correct: relay refuses to sign for a client that is not part of the run")
+
+response = sign_csr_on_relay(mtls_channel, mtls_client_2, csr_1)
+if response.status_code != 400:
+    print(f"  FAIL: expected 400 when signing the CSR of client_1 for client_2, got {response.status_code}")
+    exit(1)
+print("  Correct: relay refuses to sign a CSR for another client")
+
+response = sign_csr_on_relay(mtls_channel, mtls_client_1, csr_1)
+if response.status_code != 200:
+    print(f"  FAIL: sign-fl-run-cert: {response.status_code} - {response.text}")
+    exit(1)
+cert_1 = response.json()["certificate"]
+
+# A second registration of client_1 (other app key) has a new key pair, like an attacker
+# who learned the client key. The relay must not hand out a second certificate.
+csr_1_other_key = start_learning_on_controller(
+    mtls_client_1, mtls_run["clientId2ClientKey"][mtls_client_1], mtls_run, app_key="mtls_other_app_key")
+if csr_1_other_key is None or csr_1_other_key == csr_1:
+    print("  FAIL: expected a new CSR for the second registration")
+    exit(1)
+response = sign_csr_on_relay(mtls_channel, mtls_client_1, csr_1_other_key)
+if response.status_code != 409:
+    print(f"  FAIL: expected 409 when signing a second key for the same client, got {response.status_code}")
+    exit(1)
+print("  Correct: relay refuses to sign a second key for the same client")
+
+response = start_relaying_on_controller(mtls_client_1, mtls_channel, cert_1, app_key="mtls_other_app_key")
+if response.status_code != 400:
+    print(f"  FAIL: expected 400 for a certificate that does not belong to the CSR, got {response.status_code}")
+    exit(1)
+print("  Correct: controller refuses a certificate that does not belong to its CSR")
+
+response = start_relaying_on_controller(mtls_client_1, mtls_channel, cert_1)
+if response.status_code != 200:
+    print(f"  FAIL: start-relaying: {response.status_code} - {response.text}")
+    exit(1)
+response = start_relaying_on_controller(mtls_client_1, mtls_channel, cert_1)
+if response.status_code != 409:
+    print(f"  FAIL: expected 409 for a second start-relaying, got {response.status_code}")
+    exit(1)
+print("  Correct: second start-relaying is refused")
+
+grouped = poll_from_clients(mtls_coord, mtls_channel, 1, to_aggregator=AGGREGATOR_MTLS, comm_id=MTLS_COMM_ID, timeout_s=15)
+msgs = flat_messages(grouped)
+if len(msgs) != 1 or msgs[0]["data"] != MTLS_DATA or msgs[0]["meta"]["fromClientId"] != mtls_client_1:
+    print(f"  FAIL: coordinator did not receive the message queued before the relay connection, got: {msgs}")
+    exit(1)
+print("  Coordinator received the message that was queued before the relay connection existed")
+print("Client certificate test PASSED")
 
 
 print("\n=== All tests completed successfully ===")

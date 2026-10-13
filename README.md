@@ -16,6 +16,9 @@ Two Go services to build federated learning networks and run federated learning:
 - Clients may drop out without the federated learning process stopping if the app is configured for this
   - SMPC is an exception, as it creates shards that are sent from one client to ALL other clients. All shards are required to reconstruct the data.
 - Controllers authenticate towards the relay server and the relay server authenticates towards the controllers
+  - mTLS: each federated learning run has its own CA on the relay server, which signs one client certificate per
+    controller. The private key never leaves the controller. The controllers cert signing is handled via the secure channel between local and global learning APIs.
+  - Additionally, both sides exchange run-specific keys on the application layer
 
 ## Quick start
 
@@ -117,7 +120,8 @@ public keys of clients. It does NOT orchestrate federated learning runs; this is
 
 #### Components
 
-- `pkg/relayserver/http`: `RelayServiceHTTP`: HTTP server to create and stop federated learning runs
+- `pkg/relayserver/http`: `RelayServiceHTTP`: HTTP server to create and stop federated learning runs and to sign
+  the client certificates of a run (`/create-fl-run`, `/sign-fl-run-cert`, `/stop-fl-run`)
 - `pkg/relayserver/tcp`: `RelayServiceTCP`: TCP server the controllers connect to for relaying information
 - `pkg/relayserver/bridge`: `FLRunStore`: map with the meta information of the ongoing federated learning runs.
   Managed by `RelayServiceHTTP` and used by `RelayServiceTCP`. Each run has an atomic `State` field for lifecycle
@@ -128,7 +132,9 @@ The entrypoint is `cmd/relay/main.go`.
 #### Flow
 
 `main.go` creates the `FLRunStore` and starts both `RelayServiceHTTP` and `RelayServiceTCP`. A created run is added
-to the store, where `RelayServiceTCP` finds it when clients connect. When `RelayServiceHTTP` stops a run, it marks
+to the store together with a CA generated for this run, where `RelayServiceTCP` finds it when clients connect.
+With TLS enabled, a client is only accepted if it presents a certificate signed by the CA of its run for its own
+client ID (requested via `/sign-fl-run-cert`, one key pair per client) and knows its client key. When `RelayServiceHTTP` stops a run, it marks
 the run's `State` as finished. The TCP relay goroutines detect this via `IsActive()` and exit cleanly, closing all
 connections and cleaning up pending messages.
 
@@ -177,14 +183,27 @@ When the `FLRunManagerService` receives a request to start a run, the `FLRunMana
   - an `FLRunMeta` for the run's meta information, filled with the public keys of joining clients
   - a `state` attribute used for lifecycle management of the whole run
 - creates the `flRunOrch` instance with the `FLRunHandle`
-- creates and starts the `RelayClient`, which ties the `FLRunHandle` state to its connection to the relay server
+- creates the `RelayClient`, which generates a private key and a certificate signing request (CSR) with the client
+  ID as common name. The CSR is returned in the response of `/start-learning`.
 - for app v1: creates the `LearningApiCommunicator` and the `AppCommunicatorV1` with a callback to it
 - for app v2: adds the `FLRunHandle` to the `AppCommunicatorV2`
+
+The run is not connected to the relay server yet. The caller has the CSR signed by the relay server
+(`/sign-fl-run-cert`) and posts the certificate to `/start-relaying`. Only then the `RelayClient` connects, tying
+the `FLRunHandle` state to its connection to the relay server, and the request returns once the connection is
+established. Apps may already send before that; these messages wait in the `MessageQueue`.
+
+```text
+global learning api -> relay       POST /create-fl-run     -> channel, client IDs and keys
+local learning api  -> controller  POST /start-learning    -> {"csr": "<PEM>"}
+global learning api -> relay       POST /sign-fl-run-cert  {channel, clientId, csr} -> {"certificate": "<PEM>"}
+local learning api  -> controller  POST /start-relaying    {channel, appKey, certificate}
+```
 
 **Incoming messages:** the `RelayClient` loads the message into the `MessageStore` and sets the notify channel.
 
 - App v1: this wakes up the run's `AppCommunicatorV1` watcher, which posts all stored messages to the app.
-- App v2: the app requests specific messages from the `AppCommunicatorV2` HTTP server; no notification is needed.
+- App v2: the app requests specific messages from the `AppCommunicatorV2` HTTP server; no further handling is needed.
 
 **Outgoing messages:** `AppCommunicatorV1` and `AppCommunicatorV2` enqueue the message and set the notify channel.
 This wakes up the `RelayClient`, which end-to-end encrypts and sends the message.
@@ -208,4 +227,6 @@ Matschinske, J., Späth, J., Bakhtiari, M., Probul, N., Kazemi Majdabadi, M. M.,
 (2023). The FeatureCloud platform for federated learning in biomedicine: unified approach. Journal of Medical
 Internet Research, 25, e42621.
 
-Contributors are listed in [contributions.md](contributions.md).
+Contributors are listed in [contributions.md](contributions.md). 
+Please note that this does not include the full list of contributors to the FeatureCloud controller/relay server 
+this is based on, but any changes done for FL-Net.
