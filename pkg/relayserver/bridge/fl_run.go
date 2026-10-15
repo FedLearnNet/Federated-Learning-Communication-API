@@ -47,6 +47,9 @@ type FlRunMeta struct {
 
 // newFlRun is the internal factory. Use FlRunStore.Create for external callers.
 func newFlRun(maxNumClients int, appVersion enums.AppVersionEnum) (*FlRunMeta, error) {
+	if maxNumClients < 1 || maxNumClients > flrun.MAX_CLIENTS_PER_RUN {
+		return nil, fmt.Errorf("maxNumClients must be between 1 and %d, got %d", flrun.MAX_CLIENTS_PER_RUN, maxNumClients)
+	}
 	channel := shared.NewChannel()
 	clientIDs := make([]shared.ClientID, 0, maxNumClients)
 	clientId2ClientKey := make(map[shared.ClientID]util.APIKey, maxNumClients)

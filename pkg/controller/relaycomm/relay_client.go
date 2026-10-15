@@ -198,6 +198,8 @@ func (c *RelayClient) configureTLS(mode string, tlsMode string) error {
 		c.tlsConfig = nil
 	case "self-signed":
 		logger.Warn(RELAYCLIENT, "", "Using self-signed TLS. Connection is vulnerable to MITM attacks!")
+		// Dev only: the relay's self-signed certificate can't be verified.
+		// The check above rejects this mode when mode is "prod".
 		c.tlsConfig = &tls.Config{
 			InsecureSkipVerify: true,
 			MinVersion:         tls.VersionTLS13,

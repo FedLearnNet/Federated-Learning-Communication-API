@@ -11,6 +11,7 @@ import (
 
 	bridge "fc_controller/pkg/relayserver/bridge"
 	enums "fc_controller/pkg/shared/enums"
+	flrun "fc_controller/pkg/shared/flrun"
 	shared "fc_controller/pkg/shared/link"
 	"fc_controller/pkg/shared/logger"
 	"fc_controller/pkg/shared/util"
@@ -67,6 +68,9 @@ func (s *RelayServiceHTTP) handleHealthz(w nethttp.ResponseWriter, r *nethttp.Re
 // Create FL Run
 // ---------------------------------------------------------------------------
 
+// maxSmallRequestBytes limits the body of the create and stop requests, which only carry a few fields.
+const maxSmallRequestBytes = 4 * 1024
+
 type createFLRunRequest struct {
 	MaxNumClients int    `json:"maxNumClients"`
 	AppVersion    string `json:"appVersion"`
@@ -90,13 +94,13 @@ func (s *RelayServiceHTTP) handleCreateFLRun(w nethttp.ResponseWriter, r *nethtt
 	defer func() { _ = r.Body.Close() }()
 	logger.Info(GLOBAL, "", "Received request to create FL run")
 	var req createFLRunRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := json.NewDecoder(nethttp.MaxBytesReader(w, r.Body, maxSmallRequestBytes)).Decode(&req); err != nil {
 		nethttp.Error(w, "invalid JSON body", nethttp.StatusBadRequest)
 		return
 	}
 
-	if req.MaxNumClients < 1 {
-		nethttp.Error(w, "invalid field maxNumClients, expected int >= 1", nethttp.StatusBadRequest)
+	if req.MaxNumClients < 1 || req.MaxNumClients > flrun.MAX_CLIENTS_PER_RUN {
+		nethttp.Error(w, fmt.Sprintf("invalid field maxNumClients, expected int between 1 and %d", flrun.MAX_CLIENTS_PER_RUN), nethttp.StatusBadRequest)
 		return
 	}
 
@@ -133,7 +137,9 @@ func (s *RelayServiceHTTP) handleCreateFLRun(w nethttp.ResponseWriter, r *nethtt
 		return
 	}
 
-	logger.Info(GLOBAL, "", "FL run created successfully: %+v", resp)
+	// resp holds the API keys of the run, so only non-secret fields are logged
+	logger.Info(GLOBAL, "", "FL run created successfully: channel=%s coordinatorId=%s numClients=%d",
+		resp.Channel, resp.CoordinatorID.ToString(), len(resp.ClientIDs))
 }
 
 // ---------------------------------------------------------------------------
@@ -218,7 +224,7 @@ func (s *RelayServiceHTTP) handleStopFLRun(w nethttp.ResponseWriter, r *nethttp.
 	defer func() { _ = r.Body.Close() }()
 
 	var req stopFLRunRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := json.NewDecoder(nethttp.MaxBytesReader(w, r.Body, maxSmallRequestBytes)).Decode(&req); err != nil {
 		nethttp.Error(w, "invalid JSON body", nethttp.StatusBadRequest)
 		return
 	}

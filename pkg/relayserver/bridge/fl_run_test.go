@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	enums "fc_controller/pkg/shared/enums"
+	flrun "fc_controller/pkg/shared/flrun"
 	shared "fc_controller/pkg/shared/link"
 	"fc_controller/pkg/shared/util"
 )
@@ -73,5 +74,13 @@ func TestSignClientCert_Rejects(t *testing.T) {
 	flRun.Stop()
 	if _, err := flRun.SignClientCert(clientID, newTestCSR(t, clientID)); !errors.Is(err, shared.ErrStopped) {
 		t.Errorf("expected ErrStopped for a stopped run, got: %v", err)
+	}
+}
+
+func TestNewFlRun_RejectsClientCountOutOfBounds(t *testing.T) {
+	for _, n := range []int{0, -1, flrun.MAX_CLIENTS_PER_RUN + 1} {
+		if _, err := newFlRun(n, enums.AppVersionV2); err == nil {
+			t.Errorf("expected error for maxNumClients=%d", n)
+		}
 	}
 }

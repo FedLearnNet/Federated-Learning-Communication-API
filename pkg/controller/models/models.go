@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	shared_enums "fc_controller/pkg/shared/enums"
+	"fc_controller/pkg/shared/flrun"
 	shared "fc_controller/pkg/shared/link"
 	util "fc_controller/pkg/shared/util"
 )
@@ -136,6 +137,9 @@ func (e *FLExperiment) Normalize() (*NormalizedFLExperiment, error) {
 	// --- MaxNumClients ---
 	if e.MaxNumClients <= 0 {
 		return nil, fmt.Errorf("maxNumClients must be positive, got %d", e.MaxNumClients)
+	}
+	if e.MaxNumClients > flrun.MAX_CLIENTS_PER_RUN {
+		return nil, fmt.Errorf("maxNumClients must be at most %d, got %d", flrun.MAX_CLIENTS_PER_RUN, e.MaxNumClients)
 	}
 
 	// --- OrderClientIds ---

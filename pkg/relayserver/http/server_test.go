@@ -5,10 +5,12 @@ import (
 	"encoding/json"
 	nethttp "net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	bridge "fc_controller/pkg/relayserver/bridge"
 	enums "fc_controller/pkg/shared/enums"
+	flrun "fc_controller/pkg/shared/flrun"
 	shared "fc_controller/pkg/shared/link"
 	"fc_controller/pkg/shared/util"
 )
@@ -83,5 +85,39 @@ func TestHandleSignFLRunCert(t *testing.T) {
 				t.Errorf("expected %d, got %d: %s", tc.want, rec.Code, rec.Body.String())
 			}
 		})
+	}
+}
+
+func TestHandleCreateFLRun_MaxNumClientsBounds(t *testing.T) {
+	s := NewHTTPServer(bridge.NewFlRunStore())
+	tests := []struct {
+		maxNumClients int
+		want          int
+	}{
+		{0, nethttp.StatusBadRequest},
+		{1, nethttp.StatusOK},
+		{flrun.MAX_CLIENTS_PER_RUN + 1, nethttp.StatusBadRequest},
+		{1_000_000_000, nethttp.StatusBadRequest},
+	}
+	for _, tt := range tests {
+		body, err := json.Marshal(createFLRunRequest{MaxNumClients: tt.maxNumClients, AppVersion: "v2"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		rec := httptest.NewRecorder()
+		s.handleCreateFLRun(rec, httptest.NewRequest(nethttp.MethodPost, "/create-fl-run", bytes.NewReader(body)))
+		if rec.Code != tt.want {
+			t.Errorf("maxNumClients=%d: expected %d, got %d: %s", tt.maxNumClients, tt.want, rec.Code, rec.Body.String())
+		}
+	}
+}
+
+func TestHandleCreateFLRun_RejectsOversizedBody(t *testing.T) {
+	s := NewHTTPServer(bridge.NewFlRunStore())
+	body := []byte(`{"appVersion":"v2","maxNumClients":1,"pad":"` + strings.Repeat("a", maxSmallRequestBytes) + `"}`)
+	rec := httptest.NewRecorder()
+	s.handleCreateFLRun(rec, httptest.NewRequest(nethttp.MethodPost, "/create-fl-run", bytes.NewReader(body)))
+	if rec.Code != nethttp.StatusBadRequest {
+		t.Fatalf("expected 400, got %d", rec.Code)
 	}
 }

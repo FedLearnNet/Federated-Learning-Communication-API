@@ -4,13 +4,16 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"fc_controller/pkg/controller/bridge"
 	"fc_controller/pkg/controller/models"
 	shared_enums "fc_controller/pkg/shared/enums"
+	"fc_controller/pkg/shared/flrun"
 	shared "fc_controller/pkg/shared/link"
 	util "fc_controller/pkg/shared/util"
 )
@@ -391,5 +394,43 @@ func TestHTTPServer_StartRelaying_ConnectFailureRemovesRun(t *testing.T) {
 	channel, _ := shared.ChannelFromString(experiment.Channel)
 	if _, exists := s.flManager.flRuns[bridge.RunKey{Channel: channel, AppKey: experiment.AppKey}]; exists {
 		t.Fatal("expected failed run to be removed")
+	}
+}
+
+func TestHTTPServer_StartLearning_RejectsTooManyClients(t *testing.T) {
+	_, ts := newTestServer(t)
+	clientId := newClientID(t)
+	orderClientIds := make([]shared.ClientID, flrun.MAX_CLIENTS_PER_RUN+1)
+	for i := range orderClientIds {
+		orderClientIds[i] = clientId
+	}
+	body, _ := json.Marshal(models.FLExperiment{
+		Channel:        newChannel(t).ToString(),
+		ClientId:       clientId,
+		ClientKey:      newAPIKey(t),
+		RelayKey:       newAPIKey(t),
+		RunId:          "run-1",
+		CoordinatorId:  clientId,
+		MaxNumClients:  len(orderClientIds),
+		OrderClientIds: orderClientIds,
+		AppKey:         newAPIKey(t),
+		AppVersion:     shared_enums.AppVersionV2,
+	})
+	resp := postJSON(t, ts, "/start-learning", body)
+	expectStatus(t, resp, http.StatusBadRequest)
+	respBody, _ := io.ReadAll(resp.Body)
+	if !strings.Contains(string(respBody), "maxNumClients must be at most") {
+		t.Errorf("expected maxNumClients bound error, got %s", respBody)
+	}
+}
+
+func TestHTTPServer_StartLearning_RejectsOversizedBody(t *testing.T) {
+	_, ts := newTestServer(t)
+	body := []byte(`{"runId":"` + strings.Repeat("a", maxOrchestrationRequestBytes) + `"}`)
+	resp := postJSON(t, ts, "/start-learning", body)
+	expectStatus(t, resp, http.StatusBadRequest)
+	respBody, _ := io.ReadAll(resp.Body)
+	if !strings.Contains(string(respBody), "failed to read request body") {
+		t.Errorf("expected body read error, got %s", respBody)
 	}
 }

@@ -13,6 +13,10 @@ import (
 
 const FLRUNHANDLE = "FL_RUN_HANDLE"
 
+// MAX_CLIENTS_PER_RUN caps the number of clients of one FL run. Per-run state is
+// allocated up front from the requested client count, so this bounds memory use.
+const MAX_CLIENTS_PER_RUN = 10000
+
 // FlRunBase stores the shared state for one federated learning run.
 // Both the relay server (pkg/relayserver/bridge) and the controller bridge (pkg/controller/bridge)
 // embed *FlRunBase and add their own role-specific fields on top.

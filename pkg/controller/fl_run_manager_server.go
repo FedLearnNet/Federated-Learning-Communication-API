@@ -21,6 +21,10 @@ const READTIMEOUT = 60 * time.Second
 const WRITETIMEOUT = 180 * time.Second
 const FLRUNMANAGERSERVICE = "FL_RUN_MANAGER_SERVICE" // for logging
 
+// maxOrchestrationRequestBytes limits orchestration request bodies.
+// The largest is /start-learning, which lists up to flrun.MAX_CLIENTS_PER_RUN client IDs.
+const maxOrchestrationRequestBytes = 1 << 20
+
 type FLRunManagerServiceHTTP struct {
 	port      int
 	server    *http.Server
@@ -96,13 +100,16 @@ func (s *FLRunManagerServiceHTTP) handleIndex(w http.ResponseWriter, r *http.Req
 }
 
 func (s *FLRunManagerServiceHTTP) handleStartLearning(w http.ResponseWriter, r *http.Request) error {
-	body, _ := io.ReadAll(r.Body)
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxOrchestrationRequestBytes))
+	if err != nil {
+		return models.ValidationError{Message: "failed to read request body"}
+	}
 
 	logger.Debug(FLRUNMANAGERSERVICE, "", "/start-learning request received")
 	var experiment models.FLExperiment
-	err := json.Unmarshal(body, &experiment)
+	err = json.Unmarshal(body, &experiment)
 	if err != nil {
-		logger.Warn(FLRUNMANAGERSERVICE, "", "Failed to unmarshal experiment data: %v. Body: %s", err, string(body))
+		logger.Warn(FLRUNMANAGERSERVICE, "", "Failed to unmarshal experiment data: %v", err)
 		return models.ValidationError{Message: err.Error()}
 	}
 	logger.Debug(FLRUNMANAGERSERVICE, "", "Experiment data unmarshalled successfully: %+v", experiment)
@@ -139,7 +146,7 @@ type StartRelayingRequest struct {
 // handleStartRelaying receives the signed certificate for the CSR returned by /start-learning
 // and connects the run to the relay server. Only returns 200 once connected.
 func (s *FLRunManagerServiceHTTP) handleStartRelaying(w http.ResponseWriter, r *http.Request) error {
-	body, err := io.ReadAll(r.Body)
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxOrchestrationRequestBytes))
 	if err != nil {
 		return models.ValidationError{Message: "failed to read request body"}
 	}
@@ -189,14 +196,14 @@ type StopLearningResponse struct {
 }
 
 func (s *FLRunManagerServiceHTTP) handleStopLearning(w http.ResponseWriter, r *http.Request) error {
-	body, err := io.ReadAll(r.Body)
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxOrchestrationRequestBytes))
 	if err != nil {
 		return models.ValidationError{Message: "failed to read request body"}
 	}
 
 	var req StopLearningRequest
 	if err := json.Unmarshal(body, &req); err != nil {
-		logger.Warn(FLRUNMANAGERSERVICE, "", "Failed to unmarshal stop-learning body: %v. Body: %s", err, string(body))
+		logger.Warn(FLRUNMANAGERSERVICE, "", "Failed to unmarshal stop-learning body: %v", err)
 		return models.ValidationError{Message: err.Error()}
 	}
 	if req.Channel == "" {
