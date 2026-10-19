@@ -34,13 +34,16 @@ go build -o controller ./cmd/controller
 
 Or start a relay and a controller with the published staging images: `docker compose up`.
 
+Helper scripts for building images and starting/stopping a local controller live in `dev_scripts/`
+(e.g. `sh dev_scripts/build_local_docker_image.sh`). They can be run from any directory.
+
 ## Testing
 
 ```bash
 gofmt -l .                                   # must print nothing
 go test ./...                                # unit tests
 pip install -r e2etests/requirements.txt
-bash e2etests/e2e_test.sh                    # end-to-end tests (plain, DP and SMPC message flows)
+sh e2etests/e2e_test.sh                      # end-to-end tests (plain, DP and SMPC message flows)
 ```
 
 

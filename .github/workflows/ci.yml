@@ -90,7 +90,7 @@ jobs:
         run: pip install -r e2etests/requirements.txt
 
       - name: End-to-end tests
-        run: bash e2etests/e2e_test.sh
+        run: sh e2etests/e2e_test.sh
 
       - name: Upload relay and controller logs
         if: ${{ failure() }}

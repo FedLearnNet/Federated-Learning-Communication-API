@@ -1,3 +1,8 @@
+#!/bin/sh
+# Run from project root regardless of where the script is invoked from
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+cd "$SCRIPT_DIR/.."
+
 mkdir -p data
 
 docker kill feddb-fc-controller > /dev/null 2>&1

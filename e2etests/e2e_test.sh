@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/bin/sh
 # Runs end-to-end tests:
 # Compiles the relay server and controller and uses these to start
 # one relay server
@@ -9,7 +9,7 @@
 set -e
 
 # Run from project root regardless of where the script is invoked from
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$SCRIPT_DIR/.."
 
 RELAY_BIN="/tmp/fc_relay_test"
@@ -34,7 +34,7 @@ cleanup() {
     kill "$RELAY_PID" "$CONTROLLER_PID" 2>/dev/null || true
     wait "$RELAY_PID" "$CONTROLLER_PID" 2>/dev/null || true
 
-    if [[ $status -ne 0 ]]; then
+    if [ "$status" -ne 0 ]; then
         echo ""
         echo "=== Relay log (error exit) ==="
         cat "$RELAY_LOG" 2>/dev/null || echo "(relay log unavailable)"
@@ -61,8 +61,8 @@ echo "Controller started (PID $CONTROLLER_PID) → $CONTROLLER_LOG"
 
 echo ""
 echo "=== Running Python test without TLS ==="
-output=$(python3 "$SCRIPT_DIR/e2e_test_helper.py")
-status=$?
+status=0
+output=$(python3 "$SCRIPT_DIR/e2e_test_helper.py") || status=$?
 
 if [ $status -ne 0 ]; then
     echo "Tests failed:"
@@ -92,8 +92,8 @@ echo "Controller started (PID $CONTROLLER_PID) → $CONTROLLER_LOG"
 
 echo ""
 echo "=== Running Python test with self-signed TLS ==="
-output=$(python3 "$SCRIPT_DIR/e2e_test_helper.py")
-status=$?
+status=0
+output=$(python3 "$SCRIPT_DIR/e2e_test_helper.py") || status=$?
 
 if [ $status -ne 0 ]; then
     echo "Tests failed:"

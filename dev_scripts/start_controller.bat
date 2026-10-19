@@ -1,3 +1,4 @@
+cd /d "%~dp0.."
 SET basePath=%cd%
 SET controllerName=fc-controller
 

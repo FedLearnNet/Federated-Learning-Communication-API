@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/bin/sh
 set -e
 # Runs end-to-end tests:
 # Builds/Pulls relay and controller docker images and uses these to start
@@ -8,7 +8,7 @@ set -e
 # multiple clients all using the same controller
 # see the python script for details on the test cases
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$SCRIPT_DIR/.."
 
 ### CONFIG
@@ -49,23 +49,23 @@ cleanup() {
 trap cleanup EXIT
 
 run_test_case() {
-    local relay_image="$1"
-    local controller_image="$2"
-    local test_number="$3"
-    local network_mode="$4"
-    local tls_mode="${5:-self-signed}"
-    local relay_log="${RELAY_LOG_PREFIX}.test${test_number}.log"
-    local controller_log="${CONTROLLER_LOG_PREFIX}.test${test_number}.log"
-    local description="${network_mode} networking, tls=${tls_mode}"
+    relay_image="$1"
+    controller_image="$2"
+    test_number="$3"
+    network_mode="$4"
+    tls_mode="${5:-self-signed}"
+    relay_log="${RELAY_LOG_PREFIX}.test${test_number}.log"
+    controller_log="${CONTROLLER_LOG_PREFIX}.test${test_number}.log"
+    description="${network_mode} networking, tls=${tls_mode}"
 
     echo ""
     echo "=== TEST ${test_number}: ${description} ==="
-    if [[ "$network_mode" == "bridge" ]]; then
-        local relay_flags="--network bridge -p 9140:9140 -p 9141:9141"
-        local controller_flags="--network bridge -p 8002:8002 -p 8003:8003 --add-host=host.docker.internal:host-gateway"
+    if [ "$network_mode" = "bridge" ]; then
+        relay_flags="--network bridge -p 9140:9140 -p 9141:9141"
+        controller_flags="--network bridge -p 8002:8002 -p 8003:8003 --add-host=host.docker.internal:host-gateway"
     else
-        local relay_flags="--network host"
-        local controller_flags="--network host"
+        relay_flags="--network host"
+        controller_flags="--network host"
     fi
 
     docker run --rm --name "$RELAY_CONTAINER" \
@@ -98,8 +98,8 @@ run_test_case() {
     echo "Controller container started (PID $CONTROLLER_PID) → $controller_log"
     echo ""
     echo "=== Running Test ${test_number} (${description}) ==="
-    output=$(python3 "$SCRIPT_DIR/e2e_test_helper.py")
-    status=$?
+    status=0
+    output=$(python3 "$SCRIPT_DIR/e2e_test_helper.py") || status=$?
 
     if [ $status -ne 0 ]; then
         echo "=== Tests failed ==="
@@ -117,6 +117,6 @@ run_test_case "$LOCAL_RELAY_IMAGE" "$LOCAL_CONTROLLER_IMAGE" "2" "bridge" "off"
 run_test_case "$LOCAL_RELAY_IMAGE" "$LOCAL_CONTROLLER_IMAGE" "3" "host" "self-signed"
 
 # Staging images
-run_test_case "$RELAY_IMAGE" "$CONTROLLER_IMAGE" "4" "bridge" "self-signed"
-run_test_case "$RELAY_IMAGE" "$CONTROLLER_IMAGE" "5" "bridge" "off"
-run_test_case "$RELAY_IMAGE" "$CONTROLLER_IMAGE" "6" "host" "self-signed"
+run_test_case "$STAGING_RELAY_IMAGE" "$STAGING_CONTROLLER_IMAGE" "4" "bridge" "self-signed"
+run_test_case "$STAGING_RELAY_IMAGE" "$STAGING_CONTROLLER_IMAGE" "5" "bridge" "off"
+run_test_case "$STAGING_RELAY_IMAGE" "$STAGING_CONTROLLER_IMAGE" "6" "host" "self-signed"
