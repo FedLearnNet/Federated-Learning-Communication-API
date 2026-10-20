@@ -12,8 +12,25 @@ env:
   REGISTRY: ghcr.io/fedlearnnet/federated-learning-communication-api
 
 jobs:
+  # Version from the VERSION file and whether it gets an image tag and a release, see FedLearnNet/.github/actions/version
+  version:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      tag_image: ${{ steps.version.outputs.tag_image }}
+      release: ${{ steps.version.outputs.release }}
+      prerelease: ${{ steps.version.outputs.prerelease }}
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+      - id: version
+        uses: FedLearnNet/.github/actions/version@main
+
   build:
     name: Build ${{ matrix.image }} (${{ matrix.arch }})
+    needs: version
     # main -> latest, develop -> staging; other branches would overwrite those tags
     if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop'
     strategy:
@@ -70,6 +87,7 @@ jobs:
           labels: |
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
             org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.version=${{ needs.version.outputs.version }}
           outputs: type=image,name=${{ env.REGISTRY }}/${{ matrix.image }},push-by-digest=true,name-canonical=true,push=true
           # Reuses the go mod download layer as long as go.mod/go.sum are unchanged
           cache-from: type=gha,scope=${{ matrix.image }}-${{ matrix.arch }}
@@ -90,7 +108,7 @@ jobs:
 
   manifest:
     name: Tag ${{ matrix.image }}
-    needs: build
+    needs: [version, build]
     strategy:
       matrix:
         image: [controller, controller-relay]
@@ -116,12 +134,33 @@ jobs:
         working-directory: ${{ runner.temp }}/digests
         env:
           IMAGE: ${{ env.REGISTRY }}/${{ matrix.image }}
+          VERSION: ${{ needs.version.outputs.version }}
+          TAG_IMAGE: ${{ needs.version.outputs.tag_image }}
         run: |
           tag=$([ "$GITHUB_REF" = "refs/heads/main" ] && echo latest || echo staging)
+          tag_args=(-t "$IMAGE:$tag" -t "$IMAGE:$tag-${GITHUB_SHA::7}")
+          if [ "$TAG_IMAGE" = true ]; then tag_args+=(-t "$IMAGE:$VERSION"); fi
           docker buildx imagetools create \
-            -t "$IMAGE:$tag" \
-            -t "$IMAGE:$tag-${GITHUB_SHA::7}" \
+            "${tag_args[@]}" \
             $(printf "$IMAGE@sha256:%s " *)
+
+  # First build of a release candidate or release: git tag and GitHub release
+  release:
+    needs: [version, manifest]
+    if: needs.version.outputs.release == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.version.outputs.version }}
+          PRERELEASE: ${{ needs.version.outputs.prerelease }}
+        run: |
+          gh release create "$VERSION" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
+            --title "$VERSION" --generate-notes --prerelease="$PRERELEASE"
 
   # Vulnerability scan after every build (results under Security → Code scanning)
   scan:

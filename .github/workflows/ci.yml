@@ -10,6 +10,7 @@ on:
       - "e2etests/**"
       - "Dockerfile*"
       - "config*.yml"
+      - "VERSION"
       - ".github/workflows/ci.yml"
       - ".github/workflows/docker.yml"
   pull_request:
@@ -160,14 +161,14 @@ jobs:
           sarif_file: govulncheck.sarif
           category: govulncheck
 
-  # Images are only published when tests and e2e tests pass (main -> latest, develop -> staging)
+  # Images are only published when tests and e2e tests pass (main -> latest, develop -> staging, both also the version)
   images:
     name: Docker images
     needs: [test, e2e]
     if: github.event_name != 'pull_request' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop')
     uses: ./.github/workflows/docker.yml
-    # security-events: the image scan inside docker.yml uploads its findings to code scanning
+    # contents: write for the release of a new version, security-events: the image scan uploads its findings to code scanning
     permissions:
-      contents: read
+      contents: write
       packages: write
       security-events: write
