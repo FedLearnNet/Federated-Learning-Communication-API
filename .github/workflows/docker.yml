@@ -138,7 +138,7 @@ jobs:
           TAG_IMAGE: ${{ needs.version.outputs.tag_image }}
         run: |
           tag=$([ "$GITHUB_REF" = "refs/heads/main" ] && echo latest || echo staging)
-          tag_args=(-t "$IMAGE:$tag" -t "$IMAGE:$tag-${GITHUB_SHA::7}")
+          tag_args=(-t "$IMAGE:$tag")
           if [ "$TAG_IMAGE" = true ]; then tag_args+=(-t "$IMAGE:$VERSION"); fi
           docker buildx imagetools create \
             "${tag_args[@]}" \
