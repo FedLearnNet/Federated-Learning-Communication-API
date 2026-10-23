@@ -216,36 +216,190 @@ func TestShardAggregate__AddLarge(t *testing.T) {
 	}
 }
 
-func TestShardAggregate__Multiply2(t *testing.T) {
-	astrInt := 30300
-	exp := 8 // With a big exponent we have the risk of overflowing
-
-	paramsInt := FloatToInt(float64(astrInt), exp)
-	ps := Shard(paramsInt, "multiply", 2, exp)
-	if len(ps) != 2 {
-		t.Fatal()
+// runSMPCWorkflow simulates a full SMPC round: every client splits its input
+// into one shard per client, every client sums the shards it received and
+// the coordinator sums these partial sums.
+func runSMPCWorkflow(t *testing.T, inputs []interface{}, operation string, exp int) interface{} {
+	t.Helper()
+	n := len(inputs)
+	received := make([][]IntParams, n)
+	for _, input := range inputs {
+		intParams, err := PrepareSMPCInput(input, operation, exp, n)
+		if err != nil {
+			t.Fatalf("PrepareSMPCInput failed: %v", err)
+		}
+		for i, shard := range Shard(intParams, operation, n, exp) {
+			received[i] = append(received[i], shard)
+		}
 	}
+	partialSums := []IntParams{}
+	for _, shards := range received {
+		partialSums = append(partialSums, Aggregate(shards, operation, exp))
+	}
+	result, err := FinalizeSMPCResult(Aggregate(partialSums, operation, exp), operation, exp)
+	if err != nil {
+		t.Fatalf("FinalizeSMPCResult failed: %v", err)
+	}
+	return result
+}
 
-	params2 := Aggregate(ps, "multiply", exp)
-	result := IntToFloat(params2, exp)
-	if int(math.Round(result.(float64))) != astrInt {
-		t.Fatal()
+func relativeError(a, b float64) float64 {
+	if b == 0 {
+		return math.Abs(a)
+	}
+	return math.Abs(a-b) / math.Abs(b)
+}
+
+func TestShardAggregate__Multiply2(t *testing.T) {
+	result := runSMPCWorkflow(t, []interface{}{float64(30300), float64(1)}, "multiply", 8)
+	if int(math.Round(result.(float64))) != 30300 {
+		t.Fatalf("expected 30300, got %v", result)
 	}
 }
 
 func TestShardAggregate__Multiply10(t *testing.T) {
-	astrInt := 2 * 3 * 5 * 7 * 11 * 13 * 17
-	exp := 8
-	paramsInt := FloatToInt(float64(astrInt), exp)
-	ps := Shard(paramsInt, "multiply", 10, exp)
-	if len(ps) != 10 {
-		t.Fatal()
+	inputs := []interface{}{}
+	for _, v := range []float64{2, 3, 5, 7, 11, 13, 17, 1, 1, 1} {
+		inputs = append(inputs, v)
 	}
+	result := runSMPCWorkflow(t, inputs, "multiply", 8)
+	if int(math.Round(result.(float64))) != 2*3*5*7*11*13*17 {
+		t.Fatalf("expected %d, got %v", 2*3*5*7*11*13*17, result)
+	}
+}
 
-	params2 := Aggregate(ps, "multiply", exp)
-	result := IntToFloat(params2, exp)
-	if int(math.Round(result.(float64))) != astrInt {
-		t.Fatal()
+func TestShardAggregate__MultiplySignsZerosAndExtremes(t *testing.T) {
+	exp := 10
+	inputs := []interface{}{
+		testDeserializeJSON([]byte(`[-2.5, 0, 1e-300, 1e150, -1, {"a": 3}]`)),
+		testDeserializeJSON([]byte(`[4, 7.5, 1e-5, 1e150, -1, {"a": -0.5}]`)),
+		testDeserializeJSON([]byte(`[-0.1, 2, 1e200, 1e-2, -1, {"a": 2}]`)),
+	}
+	expected := []float64{-2.5 * 4 * -0.1, 0, 1e-300 * 1e-5 * 1e200, 1e150 * 1e150 * 1e-2, -1}
+	result := runSMPCWorkflow(t, inputs, "multiply", exp).([]interface{})
+	for i, e := range expected {
+		got := result[i].(float64)
+		if relativeError(got, e) > float64(len(inputs))*math.Pow10(-exp)*10 {
+			t.Fatalf("index %d: expected %v, got %v", i, e, got)
+		}
+	}
+	got := result[5].(map[string]interface{})["a"].(float64)
+	if relativeError(got, -3) > 1e-8 {
+		t.Fatalf("expected -3, got %v", got)
+	}
+}
+
+func TestShardAggregate__MultiplyManyClients(t *testing.T) {
+	n := 500
+	exp := 10
+	inputs := []interface{}{}
+	expected := 1.0
+	for i := 0; i < n; i++ {
+		v := 0.5 + rand.Float64()
+		if i%3 == 0 {
+			v = -v
+		}
+		expected *= v
+		inputs = append(inputs, v)
+	}
+	result := runSMPCWorkflow(t, inputs, "multiply", exp).(float64)
+	if relativeError(result, expected) > float64(n)*math.Pow10(-exp) {
+		t.Fatalf("expected %v, got %v", expected, result)
+	}
+}
+
+func TestShardAggregate__MultiplyOverflowFails(t *testing.T) {
+	n := 3
+	encoded := []IntParams{}
+	for i := 0; i < n; i++ {
+		e, err := PrepareSMPCInput(1e200, "multiply", 8, n)
+		if err != nil {
+			t.Fatal(err)
+		}
+		encoded = append(encoded, e)
+	}
+	if _, err := FinalizeSMPCResult(Aggregate(encoded, "multiply", 8), "multiply", 8); err == nil {
+		t.Fatal("expected an error for a product exceeding the float64 range")
+	}
+}
+
+func TestShardAggregate__AddWorkflowManyClients(t *testing.T) {
+	for _, n := range []int{1, 2, 3, 10, 50} {
+		inputs := []interface{}{}
+		expected := 0.0
+		for i := 0; i < n; i++ {
+			v := math.Round((rand.Float64()*2000-1000)*1e6) / 1e6
+			expected += v
+			inputs = append(inputs, v)
+		}
+		result := runSMPCWorkflow(t, inputs, "add", 12).(float64)
+		if math.Abs(result-expected) > 1e-6 {
+			t.Fatalf("n=%d: expected %v, got %v", n, expected, result)
+		}
+	}
+}
+
+func TestShardAggregate__AddRangeLimits(t *testing.T) {
+	for _, n := range []int{2, 3, 10} {
+		bound := math.MaxInt64 / int64(n)
+		for _, v := range []int64{bound, -bound, 0, 1, -1} {
+			if err := CheckSMPCAddRange(v, n); err != nil {
+				t.Fatalf("value %d should be accepted for %d clients: %v", v, n, err)
+			}
+			received := make([][]IntParams, n)
+			for c := 0; c < n; c++ {
+				for i, shard := range Shard(v, "add", n, 0) {
+					received[i] = append(received[i], shard)
+				}
+			}
+			partialSums := make([]IntParams, n)
+			for i := range received {
+				partialSums[i] = Aggregate(received[i], "add", 0)
+			}
+			if got := Aggregate(partialSums, "add", 0).(int64); got != v*int64(n) {
+				t.Fatalf("n=%d: expected %d, got %d", n, v*int64(n), got)
+			}
+		}
+		if err := CheckSMPCAddRange(bound+1, n); err == nil {
+			t.Fatalf("value %d should be rejected for %d clients", bound+1, n)
+		}
+		if err := CheckSMPCAddRange([]IntParams{int64(0), -bound - 1}, n); err == nil {
+			t.Fatalf("value %d should be rejected for %d clients", -bound-1, n)
+		}
+	}
+}
+
+func TestPrepareSMPCInput__RejectsInvalidInputs(t *testing.T) {
+	for _, input := range []interface{}{1e10, []interface{}{1.0, 2e7}, math.NaN(), math.Inf(1)} {
+		if _, err := PrepareSMPCInput(input, "add", 12, 3); err == nil {
+			t.Fatalf("input %v should be rejected at exponent 12", input)
+		}
+	}
+	if _, err := PrepareSMPCInput(math.NaN(), "multiply", 12, 3); err == nil {
+		t.Fatal("NaN should be rejected for multiplication")
+	}
+	if _, err := PrepareSMPCInput([]interface{}{1.0}, "subtract", 12, 3); err == nil {
+		t.Fatal("unknown operations should be rejected")
+	}
+}
+
+func TestShard__SharesAreUniform(t *testing.T) {
+	// a small value must be hidden by shards spread over the whole int64 range
+	value := FloatToInt(50.0, 12)
+	large := 0
+	total := 0
+	for i := 0; i < 10000; i++ {
+		for _, shard := range Shard(value, "add", 3, 12) {
+			total++
+			s := shard.(int64)
+			if s > math.MaxInt64/4 || s < math.MinInt64/4 {
+				large++
+			}
+		}
+	}
+	// for uniform shards three quarters of them are outside of +-2^61
+	if fraction := float64(large) / float64(total); fraction < 0.7 || fraction > 0.8 {
+		t.Fatalf("expected about 75%% of the shards outside +-2^61, got %v", fraction)
 	}
 }
 
@@ -340,30 +494,3 @@ func TestShardWorkflow12(t *testing.T) {
 		t.Fatal()
 	}
 }
-
-/*func TestShardAggregate__MultiplyLarge(t *testing.T) {
-	rand.Seed(1)
-	n := 2
-	l := 16
-	max := 1.0
-	exp := 12
-
-	params := []interface{}{}
-	for i := 0; i < l; i++ {
-		params = append(params, float64(int(rand.Float64()*max*16))/16)
-	}
-
-	paramsInt := FloatToInt(params, exp)
-	ps := Shard(paramsInt, "multiply", n, exp)
-
-	if len(ps) != n {
-		t.Fatal()
-	}
-
-	params2 := Aggregate(ps, "multiply", exp)
-	result := IntToFloat(params2, exp)
-	result2 := IntToFloat(paramsInt, exp)
-	if result != result2 {
-		t.Fatal()
-	}
-}*/

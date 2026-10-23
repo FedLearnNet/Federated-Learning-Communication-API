@@ -212,17 +212,13 @@ func (smpcinfo *SMPCProperties) NormalizeSmpcProperties(numClients int) (Normali
 		(*smpcinfo.NumShards) <= numClients {
 		normalized.NumShards = *smpcinfo.NumShards
 	}
-	// Use given Exponent if valid (between 2 and 16), otherwise use default
+	// Use given Exponent if valid (at most 16), otherwise use default
 	if smpcinfo.Exponent != nil {
-		// Later we generate a randomnumber of size 53 bits
-		// When the exponent is 16, this needs approximately 53.152 bits
-		// to be represented, leaving the noise at a similar scale.
-		// Any bigger exponent cannot be supported well as the noise
-		// would be to low to mask the original value well.
-		if *smpcinfo.Exponent < 2 {
-			logger.Warn(PETLOGSTRING, "", "Exponent given is too low for meaningful noise generation, we suggest using an exponent bigger than 1")
-		} else if *smpcinfo.Exponent > 16 {
-			logger.Warn(PETLOGSTRING, "", "Exponent given is quite high, we suggest using an exponent smaller than 16 or the generated noise becomes insignificant in comparison to the given values")
+		// Values are encoded as int64 fixed point numbers, so a bigger
+		// exponent leaves less range for the values themselves
+		// (|value| * 10^exponent * #clients must fit into int64)
+		if *smpcinfo.Exponent > 16 {
+			logger.Warn(PETLOGSTRING, "", "Exponent given is quite high, we suggest using an exponent smaller than 16, otherwise only very small values can be aggregated. Using the default exponent instead")
 		} else {
 			normalized.Exponent = *smpcinfo.Exponent
 		}
