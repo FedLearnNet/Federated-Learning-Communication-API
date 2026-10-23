@@ -110,7 +110,11 @@ func (c *RelayClient) getShards(deserializedData interface{}, normalizedSmpcInfo
 		return nil, err
 	}
 
-	intParamData := util.FloatToInt(deserializedData, int(normalizedSmpcInfo.Exponent))
+	intParamData, err := util.PrepareSMPCInput(deserializedData, string(normalizedSmpcInfo.Operation),
+		int(normalizedSmpcInfo.Exponent), len(clientIDs))
+	if err != nil {
+		return nil, err
+	}
 	shards := util.Shard(intParamData, string(normalizedSmpcInfo.Operation), normalizedSmpcInfo.NumShards, int(normalizedSmpcInfo.Exponent))
 	for len(shards) < len(shuffledClientIDs) {
 		shards = append(shards, nil)
@@ -124,8 +128,8 @@ func (c *RelayClient) getShards(deserializedData interface{}, normalizedSmpcInfo
 	return shardMap, nil
 }
 
-// aggregateFromStore consumes one shard per client for a memo, rescales them to
-// the maximum exponent, and aggregates the resulting shard set.
+// aggregateFromStore consumes one shard per client for a memo and aggregates
+// the resulting shard set. All shards must use the same exponent.
 func (c *RelayClient) aggregateFromStore(store smpcShardStore, memo string) (util.IntParams, uint8, enums.SMPCOperation, error) {
 	if store == nil || store[memo] == nil {
 		return nil, 0, enums.SMPCOperationNone, errors.New("no SMPC shards available for memo")
@@ -134,35 +138,34 @@ func (c *RelayClient) aggregateFromStore(store smpcShardStore, memo string) (uti
 		return nil, 0, enums.SMPCOperationNone, errors.New("SMPC shards incomplete for aggregation")
 	}
 
-	maxExponent := uint8(0)
+	exponentUsed := uint8(0)
 	operationUsed := enums.SMPCOperationNone
 	hasOperation := false
 
-	for _, element := range store[memo] {
+	for clientID, element := range store[memo] {
 		if len(element) == 0 {
 			return nil, 0, enums.SMPCOperationNone, errors.New("empty SMPC shard queue entry")
 		}
 
 		if !hasOperation {
 			operationUsed = element[0].Operation
+			exponentUsed = element[0].Exponent
 			hasOperation = true
 		} else if operationUsed != element[0].Operation {
 			return nil, 0, enums.SMPCOperationNone, errors.New("different SMPC operations used by clients, cannot aggregate")
-		}
-
-		if element[0].Exponent > maxExponent {
-			maxExponent = element[0].Exponent
+		} else if exponentUsed != element[0].Exponent {
+			return nil, 0, enums.SMPCOperationNone, smpcMixedExponentError(clientID, element[0].Exponent, exponentUsed)
 		}
 	}
 
 	shards := make([]util.IntParams, 0, c.runHandle.Meta.MaxNumberOfClients)
 	for key, element := range store[memo] {
 		store[memo][key] = element[1:]
-		shards = append(shards, util.Rescale(element[0].Data, element[0].Exponent, maxExponent))
+		shards = append(shards, element[0].Data)
 	}
 
-	aggParams := util.Aggregate(shards, string(operationUsed), int(maxExponent))
-	return aggParams, maxExponent, operationUsed, nil
+	aggParams := util.Aggregate(shards, string(operationUsed), int(exponentUsed))
+	return aggParams, exponentUsed, operationUsed, nil
 }
 
 func (c *RelayClient) handleReceivedSMPCDataShard(fromClientID shared_link.ClientID, memo string,
@@ -302,24 +305,35 @@ func (c *RelayClient) handleReceivedSMPCAggregatedData(memo string, dataBytes []
 	if err := c.SMPCMergeParametersSecondAggregation(c.qAggregator[memo]); err != nil {
 		return err
 	}
-	aggParams, maxExponent, _, err := c.aggregateFromStore(c.qAggregator, memo)
+	aggParams, exponentUsed, operationUsed, err := c.aggregateFromStore(c.qAggregator, memo)
+	if err != nil {
+		return err
+	}
+	result, err := util.FinalizeSMPCResult(aggParams, string(operationUsed), int(exponentUsed))
 	if err != nil {
 		return err
 	}
 
-	return c.AddMessage(enums.SerializationGolangByte, enums.CompressionNoneByte, header, util.IntToFloat(aggParams, int(maxExponent)))
+	return c.AddMessage(enums.SerializationGolangByte, enums.CompressionNoneByte, header, result)
 }
 
-// SMPCMergeParametersFirstAggregation normalizes shards from different clients by rescaling them to
-// a common exponent (the maximum across all clients) and ensures they use the same operation.
-// This is called before the first aggregation step.
+// smpcMixedExponentError explains why all clients must use the same SMPC exponent.
+// Shards are uniformly random values modulo 2^64. Rescaling them to another
+// exponent is possible, but the range check done by each sender before sharing
+// would no longer guarantee that the aggregated result does not overflow.
+func smpcMixedExponentError(clientID shared_link.ClientID, used uint8, expected uint8) error {
+	return fmt.Errorf("client %x used SMPC exponent %d but expected %d, all clients must use the same SMPC exponent",
+		clientID, used, expected)
+}
+
+// SMPCMergeParametersFirstAggregation ensures that the shards of all clients
+// use the same exponent and the same operation before the first aggregation step.
 func (c *RelayClient) SMPCMergeParametersFirstAggregation(shardsByClient map[shared_link.ClientID][]models.SMPCMessageWrapper) error {
 	if len(shardsByClient) == 0 {
 		return errors.New("no shards to merge")
 	}
 
-	// Find the maximum exponent and ensure all use the same operation
-	var maxExponent uint8
+	var expectedExponent uint8
 	var expectedOperation enums.SMPCOperation
 	firstShard := true
 
@@ -330,27 +344,15 @@ func (c *RelayClient) SMPCMergeParametersFirstAggregation(shardsByClient map[sha
 
 		shardData := shards[0]
 		if firstShard {
-			maxExponent = shardData.Exponent
+			expectedExponent = shardData.Exponent
 			expectedOperation = shardData.Operation
 			firstShard = false
 		} else {
 			if shardData.Operation != expectedOperation {
 				return fmt.Errorf("client %x used operation %v but expected %v", clientID, shardData.Operation, expectedOperation)
 			}
-			if shardData.Exponent > maxExponent {
-				maxExponent = shardData.Exponent
-			}
-		}
-	}
-
-	// Rescale all shards to the maximum exponent
-	for clientID, shards := range shardsByClient {
-		for i, shard := range shards {
-			if shard.Exponent != maxExponent {
-				rescaledData := util.Rescale(shard.Data, shard.Exponent, maxExponent)
-				shardsByClient[clientID][i].Data = rescaledData
-				shardsByClient[clientID][i].Exponent = maxExponent
-				logger.Info(LOCAL, "", "Rescaled shard from client %x from exponent %d to %d", clientID, shard.Exponent, maxExponent)
+			if shardData.Exponent != expectedExponent {
+				return smpcMixedExponentError(clientID, shardData.Exponent, expectedExponent)
 			}
 		}
 	}
@@ -358,16 +360,15 @@ func (c *RelayClient) SMPCMergeParametersFirstAggregation(shardsByClient map[sha
 	return nil
 }
 
-// SMPCMergeParametersSecondAggregation normalizes aggregated shards from different clients by rescaling
-// them to a common exponent (the maximum across all clients) and ensures they use the same operation.
-// This is called before the second (final) aggregation.
+// SMPCMergeParametersSecondAggregation ensures that the aggregated shards of all
+// clients use the same exponent and the same operation before the second (final)
+// aggregation step.
 func (c *RelayClient) SMPCMergeParametersSecondAggregation(aggShardsByClient map[shared_link.ClientID][]models.SMPCMessageWrapper) error {
 	if len(aggShardsByClient) == 0 {
 		return errors.New("no aggregated shards to merge")
 	}
 
-	// Find the maximum exponent and ensure all use the same operation
-	var maxExponent uint8
+	var expectedExponent uint8
 	var expectedOperation enums.SMPCOperation
 	firstShard := true
 
@@ -378,27 +379,15 @@ func (c *RelayClient) SMPCMergeParametersSecondAggregation(aggShardsByClient map
 
 		aggData := shards[0]
 		if firstShard {
-			maxExponent = aggData.Exponent
+			expectedExponent = aggData.Exponent
 			expectedOperation = aggData.Operation
 			firstShard = false
 		} else {
 			if aggData.Operation != expectedOperation {
 				return fmt.Errorf("client %x sent aggregation with operation %v but expected %v", clientID, aggData.Operation, expectedOperation)
 			}
-			if aggData.Exponent > maxExponent {
-				maxExponent = aggData.Exponent
-			}
-		}
-	}
-
-	// Rescale all aggregated shards to the maximum exponent
-	for clientID, shards := range aggShardsByClient {
-		for i, shard := range shards {
-			if shard.Exponent != maxExponent {
-				rescaledData := util.Rescale(shard.Data, shard.Exponent, maxExponent)
-				aggShardsByClient[clientID][i].Data = rescaledData
-				aggShardsByClient[clientID][i].Exponent = maxExponent
-				logger.Info(LOCAL, "", "Rescaled aggregated shard from client %x from exponent %d to %d", clientID, shard.Exponent, maxExponent)
+			if aggData.Exponent != expectedExponent {
+				return smpcMixedExponentError(clientID, aggData.Exponent, expectedExponent)
 			}
 		}
 	}
@@ -406,32 +395,23 @@ func (c *RelayClient) SMPCMergeParametersSecondAggregation(aggShardsByClient map
 	return nil
 }
 
-// SMPCMergeParameters is a generic helper that normalizes SMPC parameters by rescaling them to
-// a common exponent (the maximum across all wrappers) while ensuring consistent operations.
+// SMPCMergeParameters is a generic helper that ensures that all SMPC parameters
+// use the same exponent and the same operation.
 func (c *RelayClient) SMPCMergeParameters(wrappers []models.SMPCMessageWrapper) error {
 	if len(wrappers) == 0 {
 		return errors.New("no SMPC parameters to merge")
 	}
 
-	// Find max exponent and ensure consistent operation
-	maxExponent := wrappers[0].Exponent
+	expectedExponent := wrappers[0].Exponent
 	expectedOperation := wrappers[0].Operation
 
 	for i, wrapper := range wrappers {
 		if wrapper.Operation != expectedOperation {
 			return fmt.Errorf("wrapper %d has operation %v but expected %v", i, wrapper.Operation, expectedOperation)
 		}
-		if wrapper.Exponent > maxExponent {
-			maxExponent = wrapper.Exponent
-		}
-	}
-
-	// Rescale all to max exponent
-	for i := range wrappers {
-		if wrappers[i].Exponent != maxExponent {
-			rescaledData := util.Rescale(wrappers[i].Data, wrappers[i].Exponent, maxExponent)
-			wrappers[i].Data = rescaledData
-			wrappers[i].Exponent = maxExponent
+		if wrapper.Exponent != expectedExponent {
+			return fmt.Errorf("wrapper %d used SMPC exponent %d but expected %d, all clients must use the same SMPC exponent",
+				i, wrapper.Exponent, expectedExponent)
 		}
 	}
 

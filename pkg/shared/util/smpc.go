@@ -2,10 +2,11 @@ package util
 
 import (
 	"crypto/rand"
+	"encoding/binary"
 	"fc_controller/pkg/shared/logger"
+	"fmt"
 	"math"
 	"math/big"
-	mrand "math/rand"
 )
 
 // IntParams contains parameters encoded as fixed point numbers
@@ -33,9 +34,136 @@ func NormalizeIntParams(v interface{}) IntParams {
 			m[k] = NormalizeIntParams(e)
 		}
 		return m
+	case map[interface{}]interface{}:
+		// CBOR decodes maps into interface{} with interface{} keys
+		m := make(map[string]IntParams, len(p))
+		for k, e := range p {
+			m[fmt.Sprint(k)] = NormalizeIntParams(e)
+		}
+		return m
 	default:
 		return p
 	}
+}
+
+// normalizeSMPCInput converts the deserialized app data into nested
+// []interface{} and map[string]interface{} containers with float64 or exact
+// integer (int64, uint64) leaves. CBOR decodes integers as int64/uint64 and
+// maps with interface{} keys, JSON decodes all numbers as float64.
+// Any other value type is rejected.
+func normalizeSMPCInput(params interface{}) (interface{}, error) {
+	switch p := params.(type) {
+	case []interface{}:
+		arr := make([]interface{}, len(p))
+		for i, pe := range p {
+			v, err := normalizeSMPCInput(pe)
+			if err != nil {
+				return nil, err
+			}
+			arr[i] = v
+		}
+		return arr, nil
+
+	case map[string]interface{}:
+		m := make(map[string]interface{}, len(p))
+		for k, pe := range p {
+			v, err := normalizeSMPCInput(pe)
+			if err != nil {
+				return nil, err
+			}
+			m[k] = v
+		}
+		return m, nil
+
+	case map[interface{}]interface{}:
+		m := make(map[string]interface{}, len(p))
+		for k, pe := range p {
+			ks, ok := k.(string)
+			if !ok {
+				return nil, fmt.Errorf("unsupported SMPC map key %v of type %T, expecting string keys", k, k)
+			}
+			v, err := normalizeSMPCInput(pe)
+			if err != nil {
+				return nil, err
+			}
+			m[ks] = v
+		}
+		return m, nil
+
+	case float64, int64, uint64:
+		return p, nil
+	case float32:
+		return float64(p), nil
+	case int:
+		return int64(p), nil
+	case int32:
+		return int64(p), nil
+	case uint32:
+		return int64(p), nil
+
+	default:
+		return nil, fmt.Errorf("unsupported SMPC value %v of type %T, expecting numbers or nested lists/maps of numbers", p, p)
+	}
+}
+
+// toFixedPoint converts normalized parameters (see normalizeSMPCInput) into
+// int64 fixed point numbers with the given exponent. Floats are rounded,
+// integers are scaled exactly. Values that do not fit into int64 are rejected.
+func toFixedPoint(params interface{}, exp int) (IntParams, error) {
+	switch p := params.(type) {
+	case []interface{}:
+		arr := []IntParams{}
+		for _, pe := range p {
+			v, err := toFixedPoint(pe, exp)
+			if err != nil {
+				return nil, err
+			}
+			arr = append(arr, v)
+		}
+		return arr, nil
+
+	case map[string]interface{}:
+		arr := map[string]IntParams{}
+		for k, pe := range p {
+			v, err := toFixedPoint(pe, exp)
+			if err != nil {
+				return nil, err
+			}
+			arr[k] = v
+		}
+		return arr, nil
+
+	case float64:
+		if math.IsNaN(p) || math.IsInf(p, 0) {
+			return nil, fmt.Errorf("SMPC input %v is not a finite number", p)
+		}
+		f := math.Round(p * math.Pow10(exp))
+		if math.Abs(f) >= math.MaxInt64 {
+			return nil, fmt.Errorf("SMPC input %v cannot be represented with exponent %d, "+
+				"use a smaller SMPC exponent or rescale the data", p, exp)
+		}
+		return int64(f), nil
+
+	case int64:
+		return scaleInteger(new(big.Int).SetInt64(p), exp)
+
+	case uint64:
+		return scaleInteger(new(big.Int).SetUint64(p), exp)
+
+	default:
+		return nil, fmt.Errorf("unsupported SMPC value %v of type %T", p, p)
+	}
+}
+
+// scaleInteger multiplies v by 10^exp and ensures that the result fits into int64
+func scaleInteger(v *big.Int, exp int) (int64, error) {
+	original := v.String()
+	v.Mul(v, new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(exp)), nil))
+	if !v.IsInt64() {
+		return 0, fmt.Errorf("SMPC input %s cannot be represented with exponent %d, "+
+			"use a smaller SMPC exponent or rescale the data", original, exp)
+	}
+	return v.Int64(), nil
 }
 
 // FloatToInt converts float64 parameters into int64 parameters
@@ -88,90 +216,6 @@ func IntToFloat(params IntParams, exp int) interface{} {
 	default:
 		return p
 	}
-}
-
-// Rescale converts fixed-point parameters from sourceExp to targetExp.
-// It preserves the nested structure and only rescales int64 leaves.
-func Rescale(params IntParams, sourceExp uint8, targetExp uint8) IntParams {
-	if sourceExp == targetExp {
-		return params
-	}
-
-	switch p := params.(type) {
-	case []interface{}:
-		arr := make([]IntParams, len(p))
-		for i, v := range p {
-			arr[i] = Rescale(v, sourceExp, targetExp)
-		}
-		return arr
-
-	case map[string]interface{}:
-		arr := map[string]IntParams{}
-		for k, v := range p {
-			arr[k] = Rescale(v, sourceExp, targetExp)
-		}
-		return arr
-
-	case []IntParams:
-		arr := make([]IntParams, len(p))
-		for i, v := range p {
-			arr[i] = Rescale(v, sourceExp, targetExp)
-		}
-		return arr
-
-	case []int64:
-		arr := make([]IntParams, len(p))
-		for i, v := range p {
-			arr[i] = rescaleInt64(v, sourceExp, targetExp)
-		}
-		return arr
-
-	case map[string]IntParams:
-		arr := map[string]IntParams{}
-		for k, v := range p {
-			arr[k] = Rescale(v, sourceExp, targetExp)
-		}
-		return arr
-
-	case float64:
-		return rescaleInt64(int64(math.Round(p)), sourceExp, targetExp)
-
-	case int64:
-		return rescaleInt64(p, sourceExp, targetExp)
-
-	case uint64:
-		return rescaleInt64(int64(p), sourceExp, targetExp)
-
-	default:
-		return p
-	}
-}
-
-func rescaleInt64(value int64, sourceExp uint8, targetExp uint8) int64 {
-	if sourceExp == targetExp {
-		return value
-	}
-
-	delta := int(targetExp) - int(sourceExp)
-	absDelta := delta
-	if absDelta < 0 {
-		absDelta = -absDelta
-	}
-	factor := new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(absDelta)), nil)
-	rescaled := big.NewInt(value)
-
-	if delta > 0 {
-		rescaled.Mul(rescaled, factor)
-	} else {
-		logger.Warn(SMPC, "", "Downscaling from exponenet %d to %d, this will lead to increased noise.", sourceExp, targetExp)
-		rescaled.Quo(rescaled, factor)
-	}
-
-	if !rescaled.IsInt64() {
-		logger.Fatal(SMPC, "", "INTEGER OVERFLOW/UNDERFLOW IN SMPC RESCALE")
-	}
-
-	return rescaled.Int64()
 }
 
 // // Converts string parameters marked with the prefix "i64:" into int64 parameters,
@@ -264,56 +308,24 @@ func Shard(params IntParams, operation string, n int, exp int) []IntParams {
 		}
 
 	case int64:
-		switch operation {
-		case "add":
-			rs := big.NewInt(0)
-			for i := 0; i < n-1; i++ {
-				r, err := rand.Int(rand.Reader, big.NewInt(math.MaxInt64>>20))
-				if err != nil {
-					logger.Fatal(SMPC, "", "Error in shard generation: %s", err)
-				}
-				// Since this only gives positive numbers we need to randomly
-				// make the numbers negative
-				rbool, err := rand.Int(rand.Reader, big.NewInt(2))
-				if err != nil {
-					logger.Fatal(SMPC, "", "Error in shard generation: %s", err)
-				}
-				if len(rbool.Bytes()) == 0 {
-					// if rbool is 0, the bytes representation is 0 bytes
-					r.Neg(r)
-				}
-				rs.Add(rs, r)
-				ps = append(ps, r.Int64())
-			}
-			// check for overflow
-			lastShardInt := big.NewInt(0)
-			lastShardInt = lastShardInt.Sub(big.NewInt(p), rs)
-			if !lastShardInt.IsInt64() || !rs.IsInt64() {
-				logger.Fatal(SMPC, "", "INTEGER OVERFLOW/UNDERFLOW IN SMPC ADDITION")
-			}
-			ps = append(ps, lastShardInt.Int64())
-			arrayShuffle(ps)
-
-		case "multiply":
-			rs := 1.0
-			for i := 0; i < n-1; i++ {
-				rf := mrand.Float64()
-				if rs < 1.0 {
-					rf = 1 / rf
-				}
-				ri := toInt64(rf, exp)
-				ps = append(ps, ri)
-				rs *= fromInt64(ri, exp)
-			}
-			ps = append(ps, toInt64(fromInt64(p, exp)/rs, exp))
-			mrand.Shuffle(n, func(i, j int) {
-				ps[i], ps[j] = ps[j], ps[i]
-			})
-
-		default:
-			logger.Fatal(SMPC, "", "Nonimplemented case for SMPC, unsupported datatype %T", p)
+		// Additive secret sharing over Z_{2^64}: n-1 shards are uniformly
+		// random int64 values, the last one completes the sum. All int64
+		// arithmetic wraps around modulo 2^64, so each shard on its own is
+		// uniformly distributed and reveals nothing about p. Multiply inputs
+		// are encoded by EncodeMultiplyInput beforehand, so they are shared
+		// the same way.
+		if operation != "add" && operation != "multiply" {
+			logger.Fatal(SMPC, "", "Nonimplemented SMPC operation %s", operation)
 			return nil
 		}
+		var rs int64
+		for i := 0; i < n-1; i++ {
+			r := randomInt64()
+			rs += r // wraps around by design
+			ps = append(ps, r)
+		}
+		ps = append(ps, p-rs)
+		arrayShuffle(ps)
 
 	case string:
 		logger.Fatal(SMPC, "", "Value type error: %s. Expecting number or array of numbers", p)
@@ -328,9 +340,9 @@ func Shard(params IntParams, operation string, n int, exp int) []IntParams {
 	return ps
 }
 
-// toInt64 transforms a float64 into an int64
+// toInt64 transforms a float64 into an int64, rounding to the nearest fixed point number
 func toInt64(f float64, exp int) int64 {
-	return int64(f * math.Pow10(exp))
+	return int64(math.Round(f * math.Pow10(exp)))
 }
 
 // fromInt64 transforms an int64 into a float64
@@ -433,21 +445,14 @@ func applyOperation(params IntParams, operation string, exp int) IntParams {
 
 	switch pv := params.(type) {
 	case []int64:
-		switch operation {
-		case "add":
-			s = int64(0)
-			for _, pe := range pv {
-				s = saveAdd(s.(int64), pe)
-			}
-		case "multiply":
-			s = float64(1)
-			for _, pe := range pv {
-				s = s.(float64) * fromInt64(pe, exp)
-			}
-			s = toInt64(s.(float64), exp)
-		default:
-			return nil
+		// Shards and partial sums are summed modulo 2^64 for both operations
+		// (multiply inputs are log-encoded). CheckSMPCAddRange guarantees
+		// that the final sum of the true values fits into int64.
+		var sum int64
+		for _, pe := range pv {
+			sum += pe // wraps around by design
 		}
+		s = sum
 
 	case []IntParams:
 		s = []IntParams{}
@@ -641,12 +646,208 @@ func similar2(p1 interface{}, p2 interface{}, delta float64) bool {
 }
 */
 
-func saveAdd(a, b int64) int64 {
-	if (b > 0 && a > math.MaxInt64-b) || (b < 0 && a < math.MinInt64-b) {
-		logger.Fatal(SMPC, "", "INTEGER OVERFLOW IN SMPC ADDITION")
-		return 0
+// randomInt64 returns a uniformly distributed int64 from crypto/rand
+func randomInt64() int64 {
+	var b [8]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		logger.Fatal(SMPC, "", "Error in shard generation: %s", err)
 	}
-	return a + b
+	return int64(binary.LittleEndian.Uint64(b[:]))
+}
+
+// randomNonZeroInt64 returns a uniformly distributed non-zero int64
+func randomNonZeroInt64() int64 {
+	for {
+		if r := randomInt64(); r != 0 {
+			return r
+		}
+	}
+}
+
+// maxSMPCSummand is the largest absolute value a single client may contribute
+// so that the sum over all numClients clients still fits into int64
+func maxSMPCSummand(numClients int) int64 {
+	if numClients < 1 {
+		numClients = 1
+	}
+	return math.MaxInt64 / int64(numClients)
+}
+
+// CheckSMPCAddRange ensures that the fixed point values in params can be
+// summed over numClients clients without leaving the int64 range. As shards
+// are aggregated modulo 2^64, this is what guarantees an exact result.
+func CheckSMPCAddRange(params IntParams, numClients int) error {
+	switch p := params.(type) {
+	case []IntParams:
+		for _, pe := range p {
+			if err := CheckSMPCAddRange(pe, numClients); err != nil {
+				return err
+			}
+		}
+	case map[string]IntParams:
+		for _, pe := range p {
+			if err := CheckSMPCAddRange(pe, numClients); err != nil {
+				return err
+			}
+		}
+	case int64:
+		bound := maxSMPCSummand(numClients)
+		if p > bound || p < -bound {
+			return fmt.Errorf("SMPC input %d (fixed point) exceeds the safe range of +-%d for %d clients, "+
+				"use a smaller SMPC exponent or rescale the data", p, bound, numClients)
+		}
+	}
+	return nil
+}
+
+// EncodeMultiplyInput prepares floating point parameters for a secure
+// multiplication. Each number v is replaced by three integers that are
+// then summed with the additive SMPC:
+//   - round(ln|v| * 10^exp): the sum gives the log of the product's magnitude
+//   - isNegative(v) + 2*random: only the parity of the sum (the sign) is meaningful
+//   - isZero(v) * random: the sum is non-zero iff any factor was zero
+//
+// Only the product itself can be decoded from the aggregate.
+// The product is approximate: rounding the logs gives a relative error of up
+// to about numClients * 0.5 * 10^-exp. If several clients send 0, their random
+// zero flags cancel out with probability 2^-64, which is negligible.
+// Integer inputs are converted to float64.
+func EncodeMultiplyInput(params interface{}, exp int, numClients int) (IntParams, error) {
+	switch p := params.(type) {
+	case []interface{}:
+		arr := []IntParams{}
+		for _, pe := range p {
+			enc, err := EncodeMultiplyInput(pe, exp, numClients)
+			if err != nil {
+				return nil, err
+			}
+			arr = append(arr, enc)
+		}
+		return arr, nil
+
+	case map[string]interface{}:
+		arr := map[string]IntParams{}
+		for k, pe := range p {
+			enc, err := EncodeMultiplyInput(pe, exp, numClients)
+			if err != nil {
+				return nil, err
+			}
+			arr[k] = enc
+		}
+		return arr, nil
+
+	case float64:
+		if math.IsNaN(p) || math.IsInf(p, 0) {
+			return nil, fmt.Errorf("SMPC input %v is not a finite number", p)
+		}
+		var logMagnitude, sign, zero int64
+		if p == 0 {
+			zero = randomNonZeroInt64()
+		} else {
+			logFixed := math.Round(math.Log(math.Abs(p)) * math.Pow10(exp))
+			if math.Abs(logFixed) > float64(maxSMPCSummand(numClients)) {
+				return nil, fmt.Errorf("SMPC multiplication input %v cannot be represented with exponent %d "+
+					"for %d clients, use a smaller SMPC exponent", p, exp, numClients)
+			}
+			logMagnitude = int64(logFixed)
+		}
+		if p < 0 {
+			sign = 1
+		}
+		sign += 2 * randomInt64() // wraps around by design, the parity is kept
+		return []IntParams{logMagnitude, sign, zero}, nil
+
+	case int64:
+		return EncodeMultiplyInput(float64(p), exp, numClients)
+
+	case uint64:
+		return EncodeMultiplyInput(float64(p), exp, numClients)
+
+	default:
+		return nil, fmt.Errorf("unsupported SMPC value %v of type %T", p, p)
+	}
+}
+
+// DecodeMultiplyResult converts the aggregated encoding produced by
+// EncodeMultiplyInput back into the floating point product
+func DecodeMultiplyResult(params IntParams, exp int) (interface{}, error) {
+	switch p := params.(type) {
+	case []IntParams:
+		if len(p) == 3 {
+			logMagnitude, ok1 := p[0].(int64)
+			sign, ok2 := p[1].(int64)
+			zero, ok3 := p[2].(int64)
+			if ok1 && ok2 && ok3 {
+				if zero != 0 {
+					return float64(0), nil
+				}
+				magnitude := math.Exp(float64(logMagnitude) / math.Pow10(exp))
+				if math.IsInf(magnitude, 0) {
+					return nil, fmt.Errorf("the SMPC product exceeds the float64 range")
+				}
+				if sign&1 == 1 {
+					return -magnitude, nil
+				}
+				return magnitude, nil
+			}
+		}
+		arr := []interface{}{}
+		for _, pe := range p {
+			dec, err := DecodeMultiplyResult(pe, exp)
+			if err != nil {
+				return nil, err
+			}
+			arr = append(arr, dec)
+		}
+		return arr, nil
+
+	case map[string]IntParams:
+		arr := map[string]interface{}{}
+		for k, pe := range p {
+			dec, err := DecodeMultiplyResult(pe, exp)
+			if err != nil {
+				return nil, err
+			}
+			arr[k] = dec
+		}
+		return arr, nil
+
+	default:
+		return p, nil
+	}
+}
+
+// PrepareSMPCInput validates the deserialized data sent by the app and
+// converts it into the fixed point representation that is secret shared
+// for the given SMPC operation
+func PrepareSMPCInput(params interface{}, operation string, exp int, numClients int) (IntParams, error) {
+	params, err := normalizeSMPCInput(params)
+	if err != nil {
+		return nil, err
+	}
+	switch operation {
+	case "add":
+		intParams, err := toFixedPoint(params, exp)
+		if err != nil {
+			return nil, err
+		}
+		if err := CheckSMPCAddRange(intParams, numClients); err != nil {
+			return nil, err
+		}
+		return intParams, nil
+	case "multiply":
+		return EncodeMultiplyInput(params, exp, numClients)
+	default:
+		return nil, fmt.Errorf("unsupported SMPC operation %s", operation)
+	}
+}
+
+// FinalizeSMPCResult converts the final SMPC aggregate into floating point numbers
+func FinalizeSMPCResult(params IntParams, operation string, exp int) (interface{}, error) {
+	if operation == "multiply" {
+		return DecodeMultiplyResult(params, exp)
+	}
+	return IntToFloat(params, exp), nil
 }
 
 func arrayShuffle(arr []IntParams) {
@@ -659,46 +860,3 @@ func arrayShuffle(arr []IntParams) {
 		arr[i], arr[n] = arr[n], arr[i]
 	}
 }
-
-// TODO: alternative using the crypto rand package for multiplicative noise
-// currently sometimes generates 0 shards that destroy all signal
-// rs := float64(1.0)
-// for i := 0; i < n-1; i++ {
-// 	ri := big.NewInt(1)
-// 	if rs > 1.0 {
-// 		// we need to generate noise between 0 and 1
-// 		// as we work with the integer representation, generation
-// 		// noise between 0 and 10^exp will represent a float
-// 		// between 0 and 1 in integer mode (see toInt64)
-// 		var err error
-// 		ri, err = rand.Int(rand.Reader, big.NewInt(int64(math.Pow10(exp))))
-// 		if err != nil {
-// 			logger.Fatal(SMPC, "", "Erorr in shard generation: %v", err)
-// 		}
-// 	} else {
-// 		// we need to generate noise between 1 and maxNoise
-// 		// The generated noise is at most 10^4 for the moment
-// 		// as the noise is multiplicative that is more than enough
-// 		var err error
-// 		ri, err = rand.Int(rand.Reader, big.NewInt(int64(math.Pow10(4))))
-// 		ri.Mul(ri, big.NewInt(int64(math.Pow10(exp))))
-// 		fmt.Printf("PRODUCED RI > 1: %v\n", float64(ri.Int64())/math.Pow10(exp))
-// 		if err != nil {
-// 			logger.Fatal(SMPC, "", "Error in shard generation: %v", err)
-// 		}
-// 		if ri.Cmp(big.NewInt(int64(math.Pow10(4)))) == -1 {
-// 			fmt.Printf("PRODUCED TOO SMALL SHARD: %v\n", ri)
-// 		}
-// 	}
-
-// 	ps = append(ps, ri.Int64())
-// 	// we keep the current product in the variable rs, however
-// 	// we need to calculate in the float format for this
-// 	rs *= float64(ri.Int64()) / math.Pow10(exp)
-// 	fmt.Printf("Current rs is %v (%v)\n", rs, math.Log10(math.Abs(rs)))
-
-// }
-// // calculate last shard
-// lastShard := toInt64(fromInt64(p, exp)/rs, exp)
-// ps = append(ps, lastShard)
-// arrayShuffle(ps)
