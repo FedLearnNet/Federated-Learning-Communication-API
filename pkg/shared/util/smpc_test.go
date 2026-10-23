@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"math"
 	"math/rand"
+	"reflect"
 	"testing"
 )
 
@@ -403,49 +404,81 @@ func TestShard__SharesAreUniform(t *testing.T) {
 	}
 }
 
-func TestRescale(t *testing.T) {
-	params := map[string]interface{}{
-		"a": float64(123),
-		"b": []interface{}{
-			float64(-45),
-			map[string]interface{}{"c": float64(7)},
-		},
+// CBOR decodes integers as int64/uint64 and maps with interface{} keys,
+// these must be handled like their float64 and map[string] counterparts
+func TestShardAggregate__AddIntegersAndInterfaceMaps(t *testing.T) {
+	input := map[interface{}]interface{}{
+		"ints":  []interface{}{int64(-3), uint64(2), 1.5},
+		"count": uint64(5),
 	}
-
-	rescaled := Rescale(params, 2, 4)
-
-	expected := map[string]IntParams{
-		"a": int64(12300),
-		"b": []IntParams{
-			int64(-4500),
-			map[string]IntParams{"c": int64(700)},
-		},
+	result := runSMPCWorkflow(t, []interface{}{input, input, input}, "add", 8)
+	expected := map[string]interface{}{
+		"ints":  []interface{}{float64(-9), float64(6), 4.5},
+		"count": float64(15),
 	}
-
-	if !intsEqual(rescaled, expected) {
-		t.Fatal()
+	if !reflect.DeepEqual(result, expected) {
+		t.Fatalf("expected %v, got %v", expected, result)
 	}
 }
 
-func TestRescale_Int64(t *testing.T) {
-	result := Rescale(int64(5), 2, 4)
-	if result.(int64) != int64(500) {
-		t.Fatal()
+func TestShardAggregate__MultiplyIntegersAndInterfaceMaps(t *testing.T) {
+	inputs := []interface{}{
+		map[interface{}]interface{}{"a": int64(2)},
+		map[interface{}]interface{}{"a": uint64(3)},
+		map[interface{}]interface{}{"a": int64(-4)},
+	}
+	result := runSMPCWorkflow(t, inputs, "multiply", 8).(map[string]interface{})
+	if got := result["a"].(float64); relativeError(got, -24) > 1e-7 {
+		t.Fatalf("expected about -24, got %v", got)
 	}
 }
 
-func TestRescale_SameExponent(t *testing.T) {
-	params := []IntParams{int64(100), int64(200)}
-	result := Rescale(params, 3, 3)
-	if !intsEqual(params, result) {
-		t.Fatal()
+func TestPrepareSMPCInput__RejectsUnsupportedValues(t *testing.T) {
+	inputs := []interface{}{
+		"x",
+		true,
+		nil,
+		[]interface{}{1.0, "x"},
+		map[interface{}]interface{}{1: 1.0},
+		map[string]interface{}{"a": []byte{1}},
+	}
+	for _, operation := range []string{"add", "multiply"} {
+		for _, input := range inputs {
+			if _, err := PrepareSMPCInput(input, operation, 8, 3); err == nil {
+				t.Fatalf("%s: input %v (%T) should be rejected", operation, input, input)
+			}
+		}
 	}
 }
 
-func TestRescale_Downscale(t *testing.T) {
-	result := Rescale(int64(12300), 4, 2)
-	if result.(int64) != int64(123) {
-		t.Fatal()
+func TestPrepareSMPCInput__IntegerRange(t *testing.T) {
+	for _, input := range []interface{}{int64(1e12), int64(-1e12), uint64(math.MaxUint64)} {
+		if _, err := PrepareSMPCInput(input, "add", 8, 3); err == nil {
+			t.Fatalf("input %v should be rejected at exponent 8", input)
+		}
+	}
+	// integers are scaled exactly, also beyond the float64 precision
+	large := int64(1)<<60 + 1
+	got, err := PrepareSMPCInput(large, "add", 0, 3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.(int64) != large {
+		t.Fatalf("expected %d, got %d", large, got)
+	}
+}
+
+func TestFloatToInt__Rounds(t *testing.T) {
+	// 0.29 * 1e8 is 28999999.999999996 in float64
+	if got := FloatToInt(0.29, 8).(int64); got != 29000000 {
+		t.Fatalf("expected 29000000, got %d", got)
+	}
+	got, err := PrepareSMPCInput(-0.29, "add", 8, 3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.(int64) != -29000000 {
+		t.Fatalf("expected -29000000, got %d", got)
 	}
 }
 

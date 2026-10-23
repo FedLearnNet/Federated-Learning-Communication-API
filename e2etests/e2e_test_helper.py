@@ -36,6 +36,9 @@ AUTO_COMM_PREFIX = "AUTOMATIC_COMM_ID_"
 PLAIN_DATA_SEND = 10
 # SMPC: each client sends [1.0, 2.0, 3.0], coordinator should receive sum [3.0, 6.0, 9.0]
 SMPC_DATA_SEND = [1.0, 2.0, 3.0]
+# SMPC via CBOR: integers stay integers in CBOR (positive and negative ones are
+# decoded differently) and maps decode with interface keys, so both are covered here
+SMPC_DATA_SEND_CBOR = {"floats": [1.0, 2.0, 3.0], "ints": [2, -3], "count": 5}
 SMPC_EXPONENT = 8
 # DP: each client sends 10.0 with Laplace noise; result should be close to 10.0
 DP_DATA_SEND = 10.0
@@ -396,6 +399,38 @@ def flat_messages(grouped):
     return msgs
 
 
+def expected_smpc_sum(data, num_clients):
+    """Expected SMPC add result when every client sends the same data."""
+    if isinstance(data, list):
+        return [expected_smpc_sum(v, num_clients) for v in data]
+    if isinstance(data, dict):
+        return {k: expected_smpc_sum(v, num_clients) for k, v in data.items()}
+    return data * num_clients
+
+
+def smpc_result_mismatch(result, expected, tolerance):
+    """Returns a description of the first mismatch between result and expected, or None."""
+    if isinstance(expected, list):
+        if not isinstance(result, list) or len(result) != len(expected):
+            return f"{result!r} does not match the structure of {expected!r}"
+        for r, e in zip(result, expected):
+            mismatch = smpc_result_mismatch(r, e, tolerance)
+            if mismatch:
+                return mismatch
+        return None
+    if isinstance(expected, dict):
+        if not isinstance(result, dict) or set(result.keys()) != set(expected.keys()):
+            return f"{result!r} does not match the structure of {expected!r}"
+        for k, e in expected.items():
+            mismatch = smpc_result_mismatch(result[k], e, tolerance)
+            if mismatch:
+                return mismatch
+        return None
+    if not isinstance(result, (int, float)) or abs(result - expected) > tolerance:
+        return f"{result!r} differs from expected {expected!r} by more than {tolerance}"
+    return None
+
+
 # =============================================
 # Prerequisites: ensure relay server and controller are running and healthy
 # =============================================
@@ -555,41 +590,40 @@ print("DP test PASSED (noised values within expected range)")
 # =============================================
 # SMPC TEST
 # =============================================
-print("\n--- SMPC test ---")
 smpc_params = {
     "operation": "add",
     "exponent": SMPC_EXPONENT,
     "numShards": NUM_CLIENTS,
     "enabled": True,
 }
-for client_id in client_ids:
-    send_to_aggregator(client_id, channel, SMPC_DATA_SEND, AGGREGATOR_SMPC,
-                       comm_id=SMPC_COMM_ID, smpc=smpc_params)
+for smpc_format, smpc_data, smpc_comm_id in [
+    ("json", SMPC_DATA_SEND, SMPC_COMM_ID),
+    ("cbor", SMPC_DATA_SEND_CBOR, SMPC_COMM_ID + "_cbor"),
+]:
+    print(f"\n--- SMPC test ({smpc_format}) ---")
+    for client_id in client_ids:
+        send_to_aggregator(client_id, channel, smpc_data, AGGREGATOR_SMPC,
+                           comm_id=smpc_comm_id, serialization_format=smpc_format,
+                           smpc=smpc_params)
 
-# SMPC pipeline has multiple relay hops; allow extra time.
-grouped = poll_from_clients(coordinator_id, channel, 1,
-                             to_aggregator=AGGREGATOR_SMPC, comm_id=SMPC_COMM_ID,
-                             timeout_s=10)
-smpc_msgs = flat_messages(grouped)
-print(f"Coordinator received {len(smpc_msgs)} SMPC aggregation result(s)")
-if not smpc_msgs:
-    print("FAIL: no SMPC result received at coordinator")
-    exit(1)
-for idx, msg in enumerate(smpc_msgs):
-    result = msg["data"]
-    expected = [v * NUM_CLIENTS for v in SMPC_DATA_SEND] if isinstance(result, list) else SMPC_DATA_SEND * NUM_CLIENTS
-    print(f"  SMPC result {idx+1}: {result}  (expected ≈ {expected})")
-    tolerance = 0.1
-    if isinstance(result, list):
-        for r, e in zip(result, expected):
-            if abs(r - e) > tolerance:
-                print(f"  FAIL: {r} differs from expected {e} by more than {tolerance}")
-                exit(1)
-    else:
-        if abs(result - expected) > tolerance:
-            print(f"  FAIL: {result} differs from expected {expected} by more than {tolerance}")
+    # SMPC pipeline has multiple relay hops; allow extra time.
+    grouped = poll_from_clients(coordinator_id, channel, 1,
+                                 to_aggregator=AGGREGATOR_SMPC, comm_id=smpc_comm_id,
+                                 timeout_s=10, requested_format=smpc_format)
+    smpc_msgs = flat_messages(grouped)
+    print(f"Coordinator received {len(smpc_msgs)} SMPC aggregation result(s)")
+    if not smpc_msgs:
+        print("FAIL: no SMPC result received at coordinator")
+        exit(1)
+    expected = expected_smpc_sum(smpc_data, NUM_CLIENTS)
+    for idx, msg in enumerate(smpc_msgs):
+        result = msg["data"]
+        print(f"  SMPC result {idx+1}: {result}  (expected ≈ {expected})")
+        mismatch = smpc_result_mismatch(result, expected, 0.1)
+        if mismatch:
+            print(f"  FAIL: {mismatch}")
             exit(1)
-print("SMPC test PASSED")
+    print(f"SMPC test ({smpc_format}) PASSED")
 
 # =============================================
 # AUTO COMM ID + SORT TEST
