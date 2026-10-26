@@ -60,7 +60,7 @@ jobs:
 
       - name: Publish test results
         if: ${{ !cancelled() }}
-        uses: mikepenz/action-junit-report@v6.5.0
+        uses: mikepenz/action-junit-report@v6.6.1
         with:
           report_paths: "test-results/junit.xml"
           annotate_only: true
@@ -95,7 +95,7 @@ jobs:
 
       - name: Upload relay and controller logs
         if: ${{ failure() }}
-        uses: actions/upload-artifact@v7.0.1
+        uses: actions/upload-artifact@v7.0.2
         with:
           name: e2e-logs
           path: e2etests/tmp_*.log
@@ -128,7 +128,7 @@ jobs:
       # Findings appear under Security → Code scanning
       - name: Upload findings
         if: ${{ !cancelled() && hashFiles('golangci-lint.sarif') != '' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
-        uses: github/codeql-action/upload-sarif@v4.38.0
+        uses: github/codeql-action/upload-sarif@v4.39.0
         with:
           sarif_file: golangci-lint.sarif
           category: golangci-lint
@@ -156,7 +156,7 @@ jobs:
 
       - name: Upload findings
         if: ${{ !cancelled() && hashFiles('govulncheck.sarif') != '' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
-        uses: github/codeql-action/upload-sarif@v4.38.0
+        uses: github/codeql-action/upload-sarif@v4.39.0
         with:
           sarif_file: govulncheck.sarif
           category: govulncheck
