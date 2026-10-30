@@ -39,7 +39,7 @@ func (p PrivateKey) Public() PublicKey {
 	if p.PrivateKey == nil {
 		return PublicKey{}
 	}
-	pub := p.PrivateKey.PublicKey()
+	pub := p.PublicKey()
 	var cp CPoint
 	copy(cp[:], pub.Bytes())
 	return PublicKey{cp}
@@ -63,7 +63,7 @@ func (p PrivateKey) SharedSecret(pub PublicKey) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	return p.PrivateKey.ECDH(peer)
+	return p.ECDH(peer)
 }
 
 // Serialization
@@ -297,7 +297,7 @@ func aesDecrypt(sharedSecret, bts []byte) ([]byte, error) {
 // MISC HELPER FUNCTIONS
 func RandomBytes(l uint32) ([]byte, error) {
 	if l <= 0 {
-		return []byte{}, fmt.Errorf("Creating random bytes only possible on at least 1 byte, requested length: %d", l)
+		return []byte{}, fmt.Errorf("creating random bytes only possible on at least 1 byte, requested length: %d", l)
 	}
 	b := make([]byte, l)
 	if _, err := rand.Read(b); err != nil {

@@ -17,7 +17,8 @@ const CONFIG_FILE string = "config.yml"
 
 type Config struct {
 	Relay struct {
-		Mode           string `yaml:"mode" long:"mode" env:"RELAY_MODE"`
+		Mode string `yaml:"mode" long:"mode" env:"RELAY_MODE"`
+		// Either "prod" or "dev". Prod refuses self-signed or no TLS!
 		HTTPPort       int    `yaml:"httpPort" long:"http-port" env:"RELAY_HTTP_PORT"`
 		TCPPort        int    `yaml:"tcpPort" long:"tcp-port" env:"RELAY_TCP_PORT"`
 		LogLevelStdOut string `yaml:"logLevelStdOut" long:"logLevelStdOut" env:"LOG_LEVEL_STDOUT"`

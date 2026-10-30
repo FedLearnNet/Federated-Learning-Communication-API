@@ -78,11 +78,10 @@ func ApplyDP(dataDP interface{},
 	// apply clipping if necessary
 	if clippingValPtr != nil {
 		var sensClipping float64
-		var err error = nil
 		dataDP, sensClipping, err = ClipValuesGlobal(
 			dataDP, noisetype, *(clippingValPtr))
 		if err != nil {
-			return dataDP, 0, fmt.Errorf("Error while clipping: %s", err.Error())
+			return dataDP, 0, fmt.Errorf("error while clipping: %s", err.Error())
 		}
 		// In case clipping gave a smaller
 		// Sensitivity (sensClipping) than
@@ -116,7 +115,7 @@ func checkDPArgs(noisetype string,
 	// Delta must be 0 for laplace and epsilon > 0
 	if noisetype == "laplace" {
 		if delta != 0.0 {
-			return errors.New("Laplace noise does not " +
+			return errors.New("laplace noise does not " +
 				"support delta != 0.0")
 		}
 	}
@@ -124,7 +123,7 @@ func checkDPArgs(noisetype string,
 	// Delta must be NOT 0 for gauss
 	if noisetype == "gauss" {
 		if delta <= 0.0 {
-			return errors.New("Gauss noise does not " +
+			return errors.New("gauss noise does not " +
 				"support delta = 0.0 or negative delta")
 		}
 	}
@@ -133,13 +132,13 @@ func checkDPArgs(noisetype string,
 	// non negative
 	// Epsilon must be > 0 (division by epsilon later)
 	if epsilon <= 0.0 {
-		return errors.New("Epsilon given " +
+		return errors.New("epsilon given " +
 			"is negative/0, " +
 			"must be > 0")
 	}
 	if sensitivityPtr != nil {
 		if *(sensitivityPtr) < 0.0 {
-			return errors.New("Sensitivity given " +
+			return errors.New("sensitivity given " +
 				"is negative, " +
 				"must be >= 0")
 		}
@@ -147,7 +146,7 @@ func checkDPArgs(noisetype string,
 
 	if clippingValPtr != nil {
 		if *(clippingValPtr) < 0.0 {
-			return errors.New("ClippingVal given " +
+			return errors.New("clippingVal given " +
 				"is negative, " +
 				"must be >= 0")
 		}
@@ -171,7 +170,7 @@ func checkDPArgs(noisetype string,
 // calculates 1^2 + 2^2 + 3^2
 // Currently only supports the 1-norm and 2-norm
 func getWeightsNormSumTotalInternal(data interface{}, normtype int8) float64 {
-	var curWeightnorm float64 = 0.0
+	curWeightnorm := 0.0
 	switch p := data.(type) {
 
 	// An multielement Datatype
@@ -199,28 +198,31 @@ func getWeightsNormSumTotalInternal(data interface{}, normtype int8) float64 {
 
 	// primitive cases, just square/abs
 	case float64:
-		if normtype == 1 {
+		switch normtype {
+		case 1:
 			return math.Abs(p)
-		} else if normtype == 2 {
+		case 2:
 			return math.Pow(p, 2.0)
 		}
 
 	case float32:
-		if normtype == 1 {
+		switch normtype {
+		case 1:
 			return math.Abs(float64(p))
-		} else if normtype == 2 {
+		case 2:
 			return math.Pow(float64(p), 2.0)
 		}
 
 	// primitive cases, just square/abs
 	// has to be converted to float
 	case int64:
-		if normtype == 1 {
+		switch normtype {
+		case 1:
 			if p < 0 {
 				p = -p
 			}
 			return float64(p)
-		} else if normtype == 2 {
+		case 2:
 			x := p * p
 			if p != 0 && x/p != p {
 				// overflow handling
@@ -229,12 +231,13 @@ func getWeightsNormSumTotalInternal(data interface{}, normtype int8) float64 {
 			return float64(x)
 		}
 	case int:
-		if normtype == 1 {
+		switch normtype {
+		case 1:
 			if p < 0 {
 				p = -p
 			}
 			return float64(p)
-		} else if normtype == 2 {
+		case 2:
 			pInt64 := int64(p)
 			x := pInt64 * pInt64
 			if pInt64 != 0 && x/pInt64 != pInt64 {
@@ -266,21 +269,22 @@ func getWeightsNormSumTotalInternal(data interface{}, normtype int8) float64 {
 func GetWeightsNormTotal(data interface{}, normtype int8) (float64, error) {
 
 	if normtype != 1 && normtype != 2 {
-		return -1.0, errors.New("Invalid normtype, only norm 1 and 2 are supported")
+		return -1.0, errors.New("invalid normtype, only norm 1 and 2 are supported")
 	}
 
 	sum := getWeightsNormSumTotalInternal(data, normtype)
 	if sum == math.Inf(1) {
-		return sum, errors.New("Overflow, could not calculate the norm of the given data")
+		return sum, errors.New("overflow, could not calculate the norm of the given data")
 	}
-	if normtype == 2 {
+	switch normtype {
+	case 2:
 		return math.Sqrt(sum), nil
-	} else if normtype == 1 {
+	case 1:
 		return sum, nil
 	}
 	// should not happen, normtype neither 1 nor 2 and
 	//normtype being 1 or 2 return values
-	return -1.0, errors.New("Unknown Error")
+	return -1.0, errors.New("unknown error")
 }
 
 // clips given data according to the factorClipping, which should be < 1.0
@@ -379,12 +383,13 @@ func clipInternal(data interface{},
 func ClipValuesGlobal(data interface{}, noisetype string, clippingVal float64) (
 	interface{}, float64, error) {
 	var normtype int8
-	if noisetype == "laplace" {
+	switch noisetype {
+	case "laplace":
 		normtype = 1
-	} else if noisetype == "gauss" {
+	case "gauss":
 		normtype = 2
-	} else {
-		return data, 0.0, errors.New("Only laplace and " +
+	default:
+		return data, 0.0, errors.New("only laplace and " +
 			"gauss noise are supported")
 	}
 
@@ -484,11 +489,12 @@ func addNoiseInternal(data interface{}, sensitivity float64,
 
 		//primitive cases
 	case float64:
-		if noisetype == "laplace" {
+		switch noisetype {
+		case "laplace":
 			lpNoise := noise.Laplace()
 			return lpNoise.AddNoiseFloat64(p, 1, sensitivity,
 				epsilon, delta), nil
-		} else if noisetype == "gauss" {
+		case "gauss":
 			gaussNoise := noise.Gaussian()
 			return gaussNoise.AddNoiseFloat64(p, 1, sensitivity,
 				epsilon, delta), nil
@@ -497,15 +503,16 @@ func addNoiseInternal(data interface{}, sensitivity float64,
 			// l2Sensitivity := lInfSensitivity * math.Sqrt(float64(l0Sensitivity))
 			// use 1 for l0 Sensitivity -> l2Sensitivity = lInfSensitivity * 1
 			// so give l2 sensitivity as lInfSensitivity
-		} else {
-			return data, errors.New("Invalid noisetype given")
+		default:
+			return data, errors.New("invalid noisetype given")
 		}
 	case float32:
-		if noisetype == "laplace" {
+		switch noisetype {
+		case "laplace":
 			lpNoise := noise.Laplace()
 			return lpNoise.AddNoiseFloat64(float64(p), 1, sensitivity,
 				epsilon, delta), nil
-		} else if noisetype == "gauss" {
+		case "gauss":
 			gaussNoise := noise.Gaussian()
 			return gaussNoise.AddNoiseFloat64(float64(p), 1, sensitivity,
 				epsilon, delta), nil
@@ -514,17 +521,18 @@ func addNoiseInternal(data interface{}, sensitivity float64,
 			// l2Sensitivity := lInfSensitivity * math.Sqrt(float64(l0Sensitivity))
 			// use 1 for l0 Sensitivity -> l2Sensitivity = lInfSensitivity * 1
 			// so give l2 sensitivity as lInfSensitivity
-		} else {
-			return data, errors.New("Invalid noisetype given")
+		default:
+			return data, errors.New("invalid noisetype given")
 		}
 	case int64:
 		// there is an AddNoiseInt64 function, however, it only
 		// takes an int64 for Sensitivity, therefore, we use AddNoiseFloat64
-		if noisetype == "laplace" {
+		switch noisetype {
+		case "laplace":
 			lpNoise := noise.Laplace()
 			return lpNoise.AddNoiseFloat64(float64(p), 1, sensitivity,
 				epsilon, delta), nil
-		} else if noisetype == "gauss" {
+		case "gauss":
 			gaussNoise := noise.Gaussian()
 			return gaussNoise.AddNoiseFloat64(float64(p), 1, sensitivity,
 				epsilon, delta), nil
@@ -533,17 +541,18 @@ func addNoiseInternal(data interface{}, sensitivity float64,
 			// l2Sensitivity := lInfSensitivity * math.Sqrt(float64(l0Sensitivity))
 			// use 1 for l0 Sensitivity -> l2Sensitivity = lInfSensitivity * 1
 			// so give l2 sensitivity as lInfSensitivity
-		} else {
-			return data, errors.New("Invalid noisetype given")
+		default:
+			return data, errors.New("invalid noisetype given")
 		}
 	case int:
 		// there is an AddNoiseInt64 function, however, it only
 		// takes an int64 for Sensitivity, therefore, we use AddNoiseFloat64
-		if noisetype == "laplace" {
+		switch noisetype {
+		case "laplace":
 			lpNoise := noise.Laplace()
 			return lpNoise.AddNoiseFloat64(float64(p), 1, sensitivity,
 				epsilon, delta), nil
-		} else if noisetype == "gauss" {
+		case "gauss":
 			gaussNoise := noise.Gaussian()
 			return gaussNoise.AddNoiseFloat64(float64(p), 1, sensitivity,
 				epsilon, delta), nil
@@ -552,8 +561,8 @@ func addNoiseInternal(data interface{}, sensitivity float64,
 			// l2Sensitivity := lInfSensitivity * math.Sqrt(float64(l0Sensitivity))
 			// use 1 for l0 Sensitivity -> l2Sensitivity = lInfSensitivity * 1
 			// so give l2 sensitivity as lInfSensitivity
-		} else {
-			return data, errors.New("Invalid noisetype given")
+		default:
+			return data, errors.New("invalid noisetype given")
 		}
 
 	// default case, for any other type, e.g. a string

@@ -1,0 +1,25 @@
+name: Image cleanup
+
+# Weekly removal of old untagged images and of the former <branch>-<sha> tags,
+# see FedLearnNet/.github (.github/workflows/image-cleanup.yml). Start it by hand with dry-run first.
+on:
+  schedule:
+    - cron: "0 5 * * 1" # Mondays 05:00 UTC
+  workflow_dispatch:
+    inputs:
+      dry-run:
+        description: Only log what would be deleted
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+jobs:
+  cleanup:
+    uses: FedLearnNet/.github/.github/workflows/image-cleanup.yml@main
+    with:
+      packages: federated-learning-communication-api/controller,federated-learning-communication-api/controller-relay
+      dry-run: ${{ github.event_name == 'workflow_dispatch' && inputs.dry-run }}
+    permissions:
+      packages: write

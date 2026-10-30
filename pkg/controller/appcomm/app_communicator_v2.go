@@ -256,7 +256,7 @@ func readMultipartRequest(r *http.Request) (metadataJSON []byte, data []byte, er
 		if err != nil {
 			return nil, nil, "bad request: error reading multipart part"
 		}
-		defer part.Close()
+		defer func() { _ = part.Close() }()
 		switch part.FormName() {
 		case "metadata":
 			metadataJSON, err = io.ReadAll(part)

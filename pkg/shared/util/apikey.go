@@ -2,7 +2,6 @@ package util
 
 import (
 	"crypto/rand"
-	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/hex"
 	"encoding/json"
@@ -51,12 +50,16 @@ func (k *APIKey) UnmarshalJSON(b []byte) error {
 	return nil
 }
 
+// Format redacts the key in all fmt output (%v, %+v, %s, ...), including when the key
+// is a field of a logged struct. Use String() or the JSON encoding to get the actual key.
+func (k APIKey) Format(f fmt.State, verb rune) {
+	_, _ = f.Write([]byte("[REDACTED]"))
+}
+
 func (provided APIKey) CheckApiKey(expected APIKey) bool {
-	// Hash both so they're always the same length,
-	// and to avoid leaking the expected key's length
-	p := sha256.Sum256([]byte(provided))
-	e := sha256.Sum256([]byte(expected))
-	return subtle.ConstantTimeCompare(p[:], e[:]) == 1
+	// ConstantTimeCompare only leaks whether the lengths match,
+	// which is fine as all keys have the public length APIKeyEncodedLen()
+	return subtle.ConstantTimeCompare([]byte(provided), []byte(expected)) == 1
 }
 
 // GenerateAPIKey creates a new hex-encoded API token.

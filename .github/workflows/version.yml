@@ -1,0 +1,23 @@
+name: Version
+
+# main only takes unreleased X.Y.Z, develop only X.Y.Z.dev or X.Y.Z.rcN, see FedLearnNet/.github/actions/version
+on:
+  pull_request:
+    branches: [main, develop]
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: Version check
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+      - name: Check version for ${{ github.base_ref }}
+        uses: FedLearnNet/.github/actions/version@main
+        with:
+          check-branch: ${{ github.base_ref }}

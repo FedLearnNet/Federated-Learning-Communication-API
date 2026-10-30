@@ -89,7 +89,9 @@ func buildMultipartReq(t *testing.T, target string, metadata any, data []byte) *
 	}
 	dp.Write(data) //nolint:errcheck
 
-	mw.Close()
+	if err := mw.Close(); err != nil {
+		t.Fatalf("close multipart writer: %v", err)
+	}
 	req := httptest.NewRequest("POST", target, &buf)
 	req.Header.Set("Content-Type", mw.FormDataContentType())
 	return req

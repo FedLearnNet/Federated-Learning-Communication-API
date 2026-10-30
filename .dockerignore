@@ -5,6 +5,7 @@
 *.zip
 *.pem
 *.sh
+dev_scripts
 data
 .gitlab-ci.yml
 .gitignore

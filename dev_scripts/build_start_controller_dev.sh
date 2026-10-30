@@ -1,3 +1,8 @@
+#!/bin/sh
+# Run from project root regardless of where the script is invoked from
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+cd "$SCRIPT_DIR/.."
+
 docker build -t feddb_fc_controller -f ./Dockerfile.dev .
 mkdir -p data
 
@@ -9,4 +14,4 @@ docker run \
  --name fc-controller \
  -v "/var/run/docker.sock:/var/run/docker.sock" \
  --mount "type=bind,source=$(pwd)/data,target=/data" \
- fc_controller "--internal-root=/data"
+ feddb_fc_controller "--internal-root=/data"

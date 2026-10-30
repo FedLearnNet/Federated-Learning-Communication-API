@@ -8,11 +8,14 @@ import (
 
 	"fc_controller/pkg/shared/enums"
 	shared "fc_controller/pkg/shared/link"
-	"fc_controller/pkg/shared/logger"
 	"fc_controller/pkg/shared/util"
 )
 
 const FLRUNHANDLE = "FL_RUN_HANDLE"
+
+// MAX_CLIENTS_PER_RUN caps the number of clients of one FL run. Per-run state is
+// allocated up front from the requested client count, so this bounds memory use.
+const MAX_CLIENTS_PER_RUN = 10000
 
 // FlRunBase stores the shared state for one federated learning run.
 // Both the relay server (pkg/relayserver/bridge) and the controller bridge (pkg/controller/bridge)
@@ -208,14 +211,8 @@ func (fr *FlRunBase) IsCoordinatorID(clientID shared.ClientID) bool {
 func (fr *FlRunBase) coordinatorIsParticipant() bool {
 	for _, id := range fr.ClientIDOrder {
 		if id == fr.CoordinatorID {
-			if fr.AppVersion != enums.AppVersionV1 {
-				logger.Error(FLRUNHANDLE, "", "Coordinator ID is in ClientIDOrder but AppVersion is not v1")
-			}
 			return true
 		}
-	}
-	if fr.AppVersion == enums.AppVersionV1 {
-		logger.Error(FLRUNHANDLE, "", "AppVersion is v1 but Coordinator ID is not in ClientIDOrder")
 	}
 	return false
 }

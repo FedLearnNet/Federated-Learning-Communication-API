@@ -10,8 +10,8 @@ import (
 
 func TestGetWeightsNormTotal(t *testing.T) {
 	// generate dummy data
-	var dataInterface []interface{} = make([]interface{}, 3)
-	var data []float64 = make([]float64, 3)
+	dataInterface := make([]interface{}, 3)
+	data := make([]float64, 3)
 	dataInterface[0] = rand.Float64()
 	dataInterface[1] = int64(rand.Float64() * 7861287)
 	// with standard seed, rand.Int() will produce an overflow
@@ -65,7 +65,7 @@ func TestGetWeightsNormTotal(t *testing.T) {
 
 func TestClipValuesGlobal(t *testing.T) {
 	dataInterface := make([]interface{}, 3)
-	var data []float64 = make([]float64, 3)
+	data := make([]float64, 3)
 	dataInterface[0] = 10.0
 	dataInterface[1] = int64(3)
 	// with standard seed, rand.Int() will produce an overflow
@@ -88,9 +88,7 @@ func TestClipValuesGlobal(t *testing.T) {
 	clippedData := make([]interface{}, 3)
 	switch clippedDataInterfaceType := clippedDataInterface.(type) {
 	case []interface{}:
-		for idx, val := range clippedDataInterfaceType {
-			clippedData[idx] = val
-		}
+		copy(clippedData, clippedDataInterfaceType)
 
 	}
 	if err != nil {
@@ -120,9 +118,7 @@ func TestClipValuesGlobal(t *testing.T) {
 	clippedDataInterface, sens, err = ClipValuesGlobal(dataInterface, "gauss", 10.0)
 	switch clippedDataInterfaceType := clippedDataInterface.(type) {
 	case []interface{}:
-		for idx, val := range clippedDataInterfaceType {
-			clippedData[idx] = val
-		}
+		copy(clippedData, clippedDataInterfaceType)
 
 	}
 	if err != nil {

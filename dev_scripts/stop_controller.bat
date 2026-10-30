@@ -1,3 +1,4 @@
+cd /d "%~dp0.."
 SET controllerName=fc-controller
 SET controllerLabel=fc-controller-label
 
