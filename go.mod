@@ -3,8 +3,8 @@ module fc_controller
 go 1.26.9
 
 require (
-	github.com/gorilla/mux v1.7.4
-	github.com/klauspost/compress v1.18.7
+	github.com/gorilla/mux v1.8.1
+	github.com/klauspost/compress v1.20.3
 )
 
 require (
@@ -15,14 +15,14 @@ require (
 )
 
 require (
-	github.com/fxamacker/cbor/v2 v2.7.0
+	github.com/fxamacker/cbor/v2 v2.9.6
 	github.com/google/differential-privacy/go v1.1.2
 	github.com/gorilla/websocket v1.5.3
 	github.com/imdario/mergo v0.3.11
-	github.com/jessevdk/go-flags v1.4.0
+	github.com/jessevdk/go-flags v1.6.1
 	github.com/kr/pretty v0.2.1 // indirect
-	github.com/sirupsen/logrus v1.8.3
+	github.com/sirupsen/logrus v1.10.2
 	golang.org/x/sys v0.44.0 // indirect
 	gopkg.in/check.v1 v1.0.0-20180628173108-788fd7840127 // indirect
-	gopkg.in/yaml.v2 v2.3.0
+	gopkg.in/yaml.v2 v2.4.0
 )
